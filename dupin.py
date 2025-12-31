@@ -145,8 +145,14 @@ def modo_roi(interactivo=True, imagen_path=None, language_manager=None):
 
 
 def modo_camara(language_manager=None):
-    """Modo de cámara en vivo."""
+    """Modo de cámara en vivo con análisis en tiempo real."""
     camera_manager = CameraManager()
+    module_manager = ModuleManager()
+    visual_interface = VisualInterface()
+    
+    # Activar todos los módulos por defecto para la cámara
+    for module_info in module_manager.get_available_modules():
+        module_manager.activate_module(module_info['module_id'])
     
     # Obtener textos traducidos
     texts = {}
@@ -157,7 +163,7 @@ def modo_camara(language_manager=None):
             'camaras_disponibles': language_manager.get_text('available_cameras', 'camera')
         }
     
-    print(f"\n=== {texts.get('titulo', 'Modo Cámara en Vivo')} ===")
+    print(f"\n=== {texts.get('titulo', 'Modo Cámara en Vivo - Análisis Multimodular')} ===")
     
     # Mostrar cámaras disponibles
     cameras = camera_manager.list_cameras()
@@ -171,26 +177,53 @@ def modo_camara(language_manager=None):
     
     # Inicializar cámara
     if camera_manager.initialize_camera():
-        print(f"\n{texts.get('iniciando', 'Iniciando captura...')}")
+        print(f"\n{texts.get('iniciando', 'Iniciando captura y análisis...')}")
         
         def procesar_frame(frame):
-            """Procesar cada frame capturado."""
-            # Aquí se puede integrar análisis con módulos
-            return frame
+            """Procesar cada frame capturado con los módulos activos."""
+            # Limpiar detecciones previas
+            visual_interface.clear_detections()
+            visual_interface.current_image = frame
+            
+            # Realizar análisis con módulos (usamos umbral bajo para cámara)
+            predictions = module_manager.predict(frame, active_only=True)
+            
+            # Añadir detecciones
+            for module_id, module_predictions in predictions.items():
+                for pred in module_predictions:
+                    visual_interface.add_detection(
+                        class_name=f"{module_id}:{pred['class']}",
+                        confidence=pred['confidence'],
+                        bounding_box=pred['bbox']
+                    )
+            
+            # Visualizar resultados en el frame
+            display_frame = visual_interface.visualize_detections()
+            
+            # Añadir info de cámara
+            stats = camera_manager.get_stats()
+            cv2.putText(display_frame, f"FPS: {stats['frames_per_second']:.1f}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            return display_frame
         
         camera_manager.start_capture(callback=procesar_frame)
         
-        print("Controles:")
+        print("\nControles:")
         print("- ESC: Salir")
         print("- ESPACIO: Tomar foto")
         print("- R: Iniciar/detener grabación")
+        print("\nPresiona CTRL+C en esta terminal para detener el proceso si la ventana no responde.")
         
         try:
-            input("Presiona ENTER para detener la cámara...")
+            # Mantener el programa en ejecución mientras la cámara captura
+            while camera_manager.is_capturing:
+                cv2.waitKey(100)
         except KeyboardInterrupt:
             pass
         finally:
             camera_manager.stop_capture()
+            cv2.destroyAllWindows()
     else:
         print("Error inicializando la cámara")
 
@@ -363,8 +396,8 @@ def entrenar_patrones(epochs=10, language_manager=None):
         return None
 
 
-def reconocer_patron(imagen_path, roi=None, threshold=0.5, language_manager=None):
-    """Reconoce patrones en una imagen."""
+def reconocer_patron(imagen_path, roi=None, threshold=0.5, mostrar_razonamiento=False, language_manager=None):
+    """Reconoce patrones en una imagen con opción de mostrar razonamiento visual."""
     pattern_learner = PatternLearner()
     
     print(f"\n=== Reconocimiento de Patrones ===")
@@ -376,7 +409,8 @@ def reconocer_patron(imagen_path, roi=None, threshold=0.5, language_manager=None
     detections = pattern_learner.recognize_pattern(
         image_path=imagen_path,
         roi=roi,
-        threshold=threshold
+        threshold=threshold,
+        include_reasoning=mostrar_razonamiento
     )
     
     if detections:
@@ -385,6 +419,26 @@ def reconocer_patron(imagen_path, roi=None, threshold=0.5, language_manager=None
             print(f"\n  Patrón: {detection['pattern_name']}")
             print(f"  Probabilidad: {detection['probability']:.2%}")
             print(f"  Confianza: {detection['probability']:.2%}")
+            
+            if mostrar_razonamiento and 'heatmap' in detection:
+                print(f"  🎨 Mostrando mapa de calor de razonamiento para {detection['pattern_name']}...")
+                
+                # Cargar imagen original para superponer
+                img = cv2.imread(imagen_path)
+                if roi:
+                    x, y, w, h = roi
+                    img = img[y:y+h, x:x+w]
+                
+                img = cv2.resize(img, (400, 400))
+                heatmap = cv2.resize(detection['heatmap'], (400, 400))
+                heatmap = np.uint8(255 * heatmap)
+                heatmap_color = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+                
+                superimposed_img = cv2.addWeighted(img, 0.6, heatmap_color, 0.4, 0)
+                
+                cv2.imshow(f"Razonamiento: {detection['pattern_name']}", superimposed_img)
+                cv2.waitKey(0)
+                cv2.destroyAllWindows()
     else:
         print("\nNo se encontraron patrones")
     
@@ -418,9 +472,10 @@ def listar_patrones(language_manager=None):
 
 
 def comparar_con_probabilidades(imagen1_path, imagen2_path, roi1=None, roi2=None, 
-                               metodo='orb', language_manager=None):
-    """Compara dos imágenes mostrando probabilidades detalladas."""
+                               metodo='orb', mostrar_razonamiento=False, language_manager=None):
+    """Compara dos imágenes mostrando probabilidades detalladas y razonamiento visual."""
     matcher = ImageMatcher(metodo=metodo)
+    visual_interface = VisualInterface()
     
     print(f"\n=== Comparación con Probabilidades Detalladas ===")
     print(f"Imagen 1: {imagen1_path}")
@@ -431,10 +486,31 @@ def comparar_con_probabilidades(imagen1_path, imagen2_path, roi1=None, roi2=None
         print(f"  ROI 2: {roi2}")
     print(f"Método: {metodo.upper()}")
     
-    result = matcher.compare_with_details(
-        imagen1_path, imagen2_path,
-        roi1=roi1, roi2=roi2
-    )
+    # Si queremos mostrar razonamiento visual y usamos métodos de características
+    raw_data = None
+    if mostrar_razonamiento and metodo in ['orb', 'sift']:
+        img1 = matcher.cargar_imagen(imagen1_path)
+        img2 = matcher.cargar_imagen(imagen2_path)
+        
+        if roi1:
+            x, y, w, h = roi1
+            img1 = img1[y:y+h, x:x+w]
+        if roi2:
+            x, y, w, h = roi2
+            img2 = img2[y:y+h, x:x+w]
+            
+        similarity, details, raw_data = matcher._compare_features_with_details(img1, img2, return_raw=True)
+        result = {
+            'similarity': similarity,
+            'method': metodo,
+            'details': details,
+            'probability': matcher._calculate_probability(similarity)
+        }
+    else:
+        result = matcher.compare_with_details(
+            imagen1_path, imagen2_path,
+            roi1=roi1, roi2=roi2
+        )
     
     print(f"\n📊 Resultados:")
     print(f"  Similitud: {result['similarity']:.2%}")
@@ -450,30 +526,61 @@ def comparar_con_probabilidades(imagen1_path, imagen2_path, roi1=None, roi2=None
         print(f"\n📋 Detalles técnicos:")
         for key, value in result['details'].items():
             print(f"  {key}: {value}")
+            
+    # Mostrar razonamiento visual si se solicita
+    if mostrar_razonamiento and raw_data:
+        print("\n🎨 Generando visualización de razonamiento...")
+        match_img = visual_interface.visualize_matches(
+            img1, img2, 
+            raw_data['kp1'], raw_data['kp2'], 
+            raw_data['good_matches']
+        )
+        cv2.imshow("C.A. Dupin - Razonamiento de Coincidencia", match_img)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
     
     return result
 
 
 def aprobar_patron(imagen_path, roi=None, pattern_type='general', language_manager=None):
-    """Aprueba un patrón detectado para aprendizaje."""
+    """Aprueba un patrón detectado y lo añade como muestra para aprendizaje."""
     directorio = Path(imagen_path).parent
     feedback_loop = HumanFeedbackLoop(str(directorio))
+    pattern_learner = PatternLearner()
     
+    # Registrar en historial de feedback
     feedback_loop.approve_pattern(
         image_path=imagen_path,
         roi=roi,
         pattern_type=pattern_type
     )
     
-    print(f"\n✓ Patrón aprobado para aprendizaje")
+    # Si es un patrón definido por el usuario, añadir como muestra
+    # Buscamos si el pattern_type coincide con algún nombre de patrón
+    patterns = pattern_learner.list_patterns()
+    pattern_id = None
+    for p in patterns:
+        if p['name'] == pattern_type or p['id'] == pattern_type:
+            pattern_id = p['id']
+            break
+    
+    if pattern_id:
+        pattern_learner.add_pattern_sample(pattern_id, imagen_path, roi)
+        pattern_learner.record_feedback(pattern_id, is_correct=True)
+        print(f"✓ Patrón '{pattern_type}' incorporado al conocimiento del sistema")
+    else:
+        print(f"○ Patrón '{pattern_type}' registrado en feedback (no vinculado a patrón de usuario)")
+    
     return True
 
 
 def corregir_patron(imagen_path, correction, roi=None, pattern_type='general', language_manager=None):
-    """Corrige un patrón detectado para aprendizaje."""
+    """Corrige un patrón detectado y lo añade como muestra del patrón correcto."""
     directorio = Path(imagen_path).parent
     feedback_loop = HumanFeedbackLoop(str(directorio))
+    pattern_learner = PatternLearner()
     
+    # Registrar en historial de feedback
     feedback_loop.correct_pattern(
         image_path=imagen_path,
         roi=roi,
@@ -481,7 +588,29 @@ def corregir_patron(imagen_path, correction, roi=None, pattern_type='general', l
         pattern_type=pattern_type
     )
     
-    print(f"\n✓ Patrón corregido: {correction}")
+    # Si la corrección coincide con un patrón conocido, añadir como muestra
+    patterns = pattern_learner.list_patterns()
+    pattern_id = None
+    for p in patterns:
+        if p['name'] == correction or p['id'] == correction:
+            pattern_id = p['id']
+            break
+    
+    if pattern_id:
+        pattern_learner.add_pattern_sample(pattern_id, imagen_path, roi)
+        # También registramos que el patrón original fue incorrecto si era un patrón de usuario
+        orig_pattern_id = None
+        for p in patterns:
+            if p['name'] == pattern_type or p['id'] == pattern_type:
+                orig_pattern_id = p['id']
+                break
+        if orig_pattern_id:
+            pattern_learner.record_feedback(orig_pattern_id, is_correct=False)
+            
+        print(f"✓ Corrección '{correction}' incorporada como nuevo ejemplo")
+    else:
+        print(f"○ Corrección registrada: {correction}")
+    
     return True
 
 
@@ -653,6 +782,8 @@ Ejemplos de uso:
                                       help='Región de interés (x y w h)')
     reconocer_patron_parser.add_argument('--umbral', type=float, default=0.5,
                                       help='Umbral de confianza (0.0-1.0)')
+    reconocer_patron_parser.add_argument('--razonamiento', action='store_true',
+                                      help='Mostrar razonamiento visual del reconocimiento')
 
     # Comando: listar-patrones
     listar_patrones_parser = subparsers.add_parser('listar-patrones',
@@ -672,6 +803,8 @@ Ejemplos de uso:
     comparar_prob_parser.add_argument('--metodo', default='orb',
                                     choices=['orb', 'sift', 'histogram', 'ssim'],
                                     help='Método de comparación')
+    comparar_prob_parser.add_argument('--razonamiento', action='store_true',
+                                    help='Mostrar razonamiento visual de la coincidencia')
 
     # Comando: aprobar
     aprobar_parser = subparsers.add_parser('aprobar',
@@ -732,6 +865,7 @@ Ejemplos de uso:
             imagen_path=args.imagen,
             roi=tuple(args.roi) if args.roi else None,
             threshold=args.umbral,
+            mostrar_razonamiento=args.razonamiento,
             language_manager=language_manager
         )
     elif args.comando == 'listar-patrones':
@@ -743,6 +877,7 @@ Ejemplos de uso:
             roi1=tuple(args.roi1) if args.roi1 else None,
             roi2=tuple(args.roi2) if args.roi2 else None,
             metodo=args.metodo,
+            mostrar_razonamiento=args.razonamiento,
             language_manager=language_manager
         )
     elif args.comando == 'aprobar':

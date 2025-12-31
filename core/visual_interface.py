@@ -171,6 +171,44 @@ class VisualInterface:
             cv2.putText(image, text, (15, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, 
                        (255, 255, 255), 1)
     
+    def visualize_matches(self, img1: np.ndarray, img2: np.ndarray, 
+                          kp1: List, kp2: List, matches: List, 
+                          max_matches: int = 50) -> np.ndarray:
+        """
+        Visualiza las coincidencias (matches) entre dos imágenes para mostrar el razonamiento.
+        
+        Args:
+            img1: Primera imagen
+            img2: Segunda imagen
+            kp1: Keypoints de la primera imagen
+            kp2: Keypoints de la segunda imagen
+            matches: Lista de matches encontrados
+            max_matches: Número máximo de matches a mostrar
+            
+        Returns:
+            Imagen combinada con las coincidencias dibujadas
+        """
+        # Limitar número de matches para no saturar la visualización
+        matches = sorted(matches, key=lambda x: x.distance)[:max_matches]
+        
+        # Dibujar matches
+        match_img = cv2.drawMatches(img1, kp1, img2, kp2, matches, None,
+                                   flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
+        
+        # Añadir títulos
+        h, w = match_img.shape[:2]
+        cv2.putText(match_img, "Imagen 1 (Referencia)", (20, 40), 
+                   self.font, 1.0, (255, 255, 255), 2)
+        cv2.putText(match_img, "Imagen 2 (Busqueda)", (w//2 + 20, 40), 
+                   self.font, 1.0, (255, 255, 255), 2)
+        
+        # Añadir estadísticas
+        stats_text = f"Matches: {len(matches)} | Calidad Promedio: {np.mean([m.distance for m in matches]):.1f}"
+        cv2.putText(match_img, stats_text, (20, h - 20), 
+                   self.font, 0.7, (0, 255, 0), 2)
+        
+        return match_img
+
     def show_detections(self, delay: int = 0) -> bool:
         """
         Muestra las detecciones en una ventana.
