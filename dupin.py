@@ -9,10 +9,22 @@ Características principales:
 - 📷 Soporte para imágenes y cámara en vivo
 - 🖼️ Marcado de regiones de interés (ROI)
 - 🔁 Corrección en tiempo real (aprobar / rechazar / corregir)
-- 🧠 Entrenamiento incremental sin límite artificial de ejemplos
+- 🧠 Entrenamiento mejorado con técnicas avanzadas sin límite de ejemplos
 - 📊 Visualización clara de lo que el modelo está identificando
 - 🌐 Interfaz disponible en múltiples idiomas
 - 🧩 Módulos de reconocimiento preconfigurados y entrenables
+
+Mejoras de IA implementadas (SIN APIs externas):
+- 🎨 Data Augmentation (rotación, flip, jitter, blur, perspectiva)
+- 📈 Learning Rate Scheduling (CosineAnnealingWarmRestarts)
+- 🛑 Early Stopping con restauración de mejores pesos
+- 🔀 Test Time Augmentation (TTA) para inferencia robusta
+- 🎯 Focal Loss para clases desbalanceadas
+- ✨ Label Smoothing para mejor generalización
+- 🏗️ Residual Blocks en la arquitectura de la red
+- 📏 Gradient Clipping para estabilidad
+- ⚖️ Batch Normalization en todas las capas
+- 📊 Métricas detalladas (Precision, Recall, F1, Matriz de confusión)
 """
 
 import sys
@@ -456,11 +468,14 @@ def definir_patron(nombre, descripcion="", imagen_path=None, roi=None, language_
     return pattern_id
 
 
-def entrenar_patrones(epochs=10, language_manager=None):
-    """Entrena el modelo con los patrones definidos por el usuario."""
+def entrenar_patrones(epochs=30, batch_size=16, val_split=0.2, 
+                      learning_rate=0.001, use_focal_loss=False, 
+                      label_smoothing=0.0, early_stopping_patience=10,
+                      dropout_rate=0.4, language_manager=None):
+    """Entrena el modelo con los patrones definidos por el usuario usando técnicas avanzadas."""
     pattern_learner = PatternLearner()
     
-    print(f"\n=== Entrenando Patrones Definidos por Usuario ===")
+    print(f"\n=== Entrenando Patrones Definidos por Usuario (Modo Mejorado) ===")
     
     patterns = pattern_learner.list_patterns()
     if not patterns:
@@ -471,9 +486,28 @@ def entrenar_patrones(epochs=10, language_manager=None):
     for pattern in patterns:
         print(f"  - {pattern['name']} (muestras: {pattern['samples']})")
     
-    success = pattern_learner.train_patterns(epochs=epochs)
+    print(f"\n🔧 Configuración del entrenamiento:")
+    print(f"  - Épocas: {epochs}")
+    print(f"  - Batch size: {batch_size}")
+    print(f"  - Learning rate: {learning_rate}")
+    print(f"  - Validación split: {val_split*100:.0f}%")
+    print(f"  - Focal Loss: {use_focal_loss}")
+    print(f"  - Label Smoothing: {label_smoothing}")
+    print(f"  - Early Stopping: {early_stopping_patience} épocas (0 = desactivado)")
+    print(f"  - Dropout rate: {dropout_rate}")
     
-    if success:
+    history = pattern_learner.train_patterns(
+        epochs=epochs,
+        batch_size=batch_size,
+        val_split=val_split,
+        learning_rate=learning_rate,
+        use_focal_loss=use_focal_loss,
+        label_smoothing=label_smoothing,
+        early_stopping_patience=early_stopping_patience,
+        dropout_rate=dropout_rate
+    )
+    
+    if history:
         print("\n✓ Entrenamiento de patrones completado")
         return pattern_learner
     else:
@@ -481,8 +515,10 @@ def entrenar_patrones(epochs=10, language_manager=None):
         return None
 
 
-def reconocer_patron(imagen_path, roi=None, threshold=0.5, mostrar_razonamiento=False, language_manager=None):
-    """Reconoce patrones en una imagen o directorio con opción de mostrar razonamiento visual."""
+def reconocer_patron(imagen_path, roi=None, threshold=0.5, 
+                    mostrar_razonamiento=False, use_tta=False, 
+                    tta_transforms=5, language_manager=None):
+    """Reconoce patrones en una imagen o directorio con opción de mostrar razonamiento visual y TTA."""
     pattern_learner = PatternLearner()
     path = Path(imagen_path)
     
@@ -502,13 +538,16 @@ def reconocer_patron(imagen_path, roi=None, threshold=0.5, mostrar_razonamiento=
                 image_path=str(img_path),
                 roi=roi,
                 threshold=threshold,
-                include_reasoning=False  # No mostramos razonamiento en lote por defecto
+                include_reasoning=False,  # No mostramos razonamiento en lote por defecto
+                use_tta=use_tta
             )
             if detections:
                 all_detections[str(img_path)] = detections
                 print(f"  ✓ Encontrados {len(detections)} patrones")
                 for det in detections:
                     print(f"    - {det['pattern_name']} ({det['probability']:.2%})")
+                    if 'consistency' in det:
+                        print(f"      Consistencia TTA: {det['consistency']:.2%}")
             else:
                 print("  No se encontraron patrones")
         
@@ -519,12 +558,15 @@ def reconocer_patron(imagen_path, roi=None, threshold=0.5, mostrar_razonamiento=
     if roi:
         print(f"ROI: {roi}")
     print(f"Umbral de confianza: {threshold:.0%}")
+    if use_tta:
+        print(f"Test Time Augmentation: Activo ({tta_transforms} transformaciones)")
     
     detections = pattern_learner.recognize_pattern(
         image_path=imagen_path,
         roi=roi,
         threshold=threshold,
-        include_reasoning=mostrar_razonamiento
+        include_reasoning=mostrar_razonamiento,
+        use_tta=use_tta
     )
     
     if detections:
@@ -532,7 +574,13 @@ def reconocer_patron(imagen_path, roi=None, threshold=0.5, mostrar_razonamiento=
         for detection in detections:
             print(f"\n  Patrón: {detection['pattern_name']}")
             print(f"  Probabilidad: {detection['probability']:.2%}")
-            print(f"  Confianza: {detection['probability']:.2%}")
+            
+            # Mostrar información TTA si está disponible
+            if 'consistency' in detection:
+                print(f"  Consistencia TTA: {detection['consistency']:.2%}")
+                print(f"  Intervalo de confianza 95%: "
+                      f"[{detection['confidence_interval_lower']:.2%}, "
+                      f"{detection['confidence_interval_upper']:.2%}]")
             
             if mostrar_razonamiento and 'heatmap' in detection:
                 print(f"  🎨 Mostrando mapa de calor de razonamiento para {detection['pattern_name']}...")
@@ -790,6 +838,16 @@ Ejemplos de uso:
   # Entrenar modelo con datos locales
   python dupin.py entrenar ./datos_entrenamiento --epochs 20
 
+  # Definir y entrenar patrones personalizados (modo mejorado)
+  python dupin.py definir-patron "mi_logo" --imagen logo.jpg
+  python dupin.py definir-patron "mi_logo" --imagen logo2.jpg
+  python dupin.py entrenar-patrones --epochs 30 --batch-size 16 --val-split 0.2
+  python dupin.py entrenar-patrones --epochs 50 --focal-loss --early-stopping 15
+
+  # Reconocer patrones con TTA (Test Time Augmentation) para mejor precisión
+  python dupin.py reconocer-patron imagen.jpg --umbral 0.7 --tta
+  python dupin.py reconocer-patron imagen.jpg --umbral 0.6 --tta --tta-transforms 7
+
   # Modo interactivo con feedback humano
   python dupin.py interactivo ./imagenes_revisar
 
@@ -884,9 +942,23 @@ Ejemplos de uso:
 
     # Comando: entrenar-patrones
     entrenar_patrones_parser = subparsers.add_parser('entrenar-patrones',
-                                                 help='Entrenar modelo con patrones definidos')
-    entrenar_patrones_parser.add_argument('--epochs', type=int, default=10,
-                                     help='Número de épocas')
+                                                  help='Entrenar modelo con patrones definidos (modo mejorado)')
+    entrenar_patrones_parser.add_argument('--epochs', type=int, default=30,
+                                      help='Número de épocas (default: 30)')
+    entrenar_patrones_parser.add_argument('--batch-size', type=int, default=16,
+                                      help='Tamaño del batch (default: 16)')
+    entrenar_patrones_parser.add_argument('--val-split', type=float, default=0.2,
+                                      help='Proporción de validación (default: 0.2)')
+    entrenar_patrones_parser.add_argument('--learning-rate', type=float, default=0.001,
+                                      help='Learning rate inicial (default: 0.001)')
+    entrenar_patrones_parser.add_argument('--focal-loss', action='store_true',
+                                      help='Usar Focal Loss para clases desbalanceadas')
+    entrenar_patrones_parser.add_argument('--label-smoothing', type=float, default=0.0,
+                                      help='Factor de label smoothing (default: 0.0)')
+    entrenar_patrones_parser.add_argument('--early-stopping', type=int, default=10,
+                                      help='Paciencia para early stopping (0 = desactivado, default: 10)')
+    entrenar_patrones_parser.add_argument('--dropout', type=float, default=0.4,
+                                      help='Tasa de dropout (default: 0.4)')
 
     # Comando: reconocer-patron
     reconocer_patron_parser = subparsers.add_parser('reconocer-patron',
@@ -899,6 +971,10 @@ Ejemplos de uso:
                                       help='Umbral de confianza (0.0-1.0)')
     reconocer_patron_parser.add_argument('--razonamiento', action='store_true',
                                       help='Mostrar razonamiento visual del reconocimiento')
+    reconocer_patron_parser.add_argument('--tta', action='store_true',
+                                      help='Usar Test Time Augmentation para mejor precisión')
+    reconocer_patron_parser.add_argument('--tta-transforms', type=int, default=5,
+                                      help='Número de transformaciones TTA (default: 5)')
 
     # Comando: listar-patrones
     listar_patrones_parser = subparsers.add_parser('listar-patrones',
@@ -980,13 +1056,25 @@ Ejemplos de uso:
             language_manager=language_manager
         )
     elif args.comando == 'entrenar-patrones':
-        entrenar_patrones(epochs=args.epochs, language_manager=language_manager)
+        entrenar_patrones(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            val_split=args.val_split,
+            learning_rate=args.learning_rate,
+            use_focal_loss=args.focal_loss,
+            label_smoothing=args.label_smoothing,
+            early_stopping_patience=args.early_stopping,
+            dropout_rate=args.dropout,
+            language_manager=language_manager
+        )
     elif args.comando == 'reconocer-patron':
         reconocer_patron(
             imagen_path=args.imagen,
             roi=tuple(args.roi) if args.roi else None,
             threshold=args.umbral,
             mostrar_razonamiento=args.razonamiento,
+            use_tta=args.tta,
+            tta_transforms=args.tta_transforms,
             language_manager=language_manager
         )
     elif args.comando == 'listar-patrones':
