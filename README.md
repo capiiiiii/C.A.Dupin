@@ -11,6 +11,13 @@ Cualquiera que quiera contribuir con codigo es bienvenido
 - **Entrenamiento de modelos**: Entrena modelos personalizados con tus propios datos
 - **Loop de retroalimentación humana**: Modo interactivo para revisar y corregir resultados en tiempo real
 
+## 📚 Documentación
+
+Para una descripción completa del sistema, su arquitectura y filosofía, consulta:
+- **[DESCRIPCION_SISTEMA.md](DESCRIPCION_SISTEMA.md)** - Descripción general del sistema
+- **[FEATURES_IMPLEMENTED.md](FEATURES_IMPLEMENTED.md)** - Características implementadas en detalle
+- **[IMPLEMENTACION.md](IMPLEMENTACION.md)** - Detalles técnicos de implementación
+
 ## Instalación
 
 ```bash

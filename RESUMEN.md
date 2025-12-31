@@ -378,8 +378,9 @@ Nueva característica que permite:
 
 ## 📞 Recursos
 
+- **Documentación del sistema**: `DESCRIPCION_SISTEMA.md` - Descripción general del sistema
 - Código fuente: `/core/`
-- Documentación: `FEATURES_IMPLEMENTED.md`, `IMPLEMENTACION.md`
+- Documentación técnica: `FEATURES_IMPLEMENTED.md`, `IMPLEMENTACION.md`
 - Ejemplos de uso: En cada sección de documentación
 - Ayuda de comandos: `python dupin.py --help`
 
