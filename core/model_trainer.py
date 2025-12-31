@@ -124,7 +124,7 @@ class ModelTrainer:
         self.learning_rate = learning_rate
         print(f"Usando dispositivo: {self.device}")
     
-    def _create_pairs(self, dataset):
+    def _create_pairs(self, dataset, max_pairs=None):
         """Crea pares de imágenes y sus etiquetas para entrenamiento siamés."""
         pairs = []
         labels = []
@@ -137,31 +137,66 @@ class ModelTrainer:
                 class_indices[label] = []
             class_indices[label].append(idx)
         
-        num_pairs = min(len(dataset) * 2, 1000)
+        # Sin límite artificial - usar todos los datos disponibles o el máximo especificado
+        if max_pairs is None:
+            max_pairs = len(dataset) * 3  # 3x más pares que imágenes para mejor entrenamiento
         
-        for _ in range(num_pairs):
-            if np.random.random() > 0.5 and num_classes > 1:
-                class_a, class_b = np.random.choice(list(class_indices.keys()), 2, replace=False)
+        # Crear pares positivos (misma clase) y negativos (clases diferentes)
+        total_possible_pairs = 0
+        
+        # Calcular pares positivos posibles
+        for class_indices_list in class_indices.values():
+            if len(class_indices_list) >= 2:
+                total_possible_pairs += len(class_indices_list) * (len(class_indices_list) - 1) // 2
+        
+        # Calcular pares negativos posibles
+        if num_classes > 1:
+            total_images = len(dataset)
+            total_negative_pairs = 0
+            for class_name, indices in class_indices.items():
+                other_images = total_images - len(indices)
+                total_negative_pairs += len(indices) * other_images
+        
+        # Determinar número final de pares (no más de los posibles, con límite práctico)
+        available_pairs = min(max_pairs, total_possible_pairs + total_negative_pairs)
+        available_pairs = min(available_pairs, 5000)  # Límite práctico para evitar problemas de memoria
+        
+        print(f"Creando hasta {available_pairs} pares de entrenamiento...")
+        
+        # Crear todos los pares positivos posibles
+        positive_pairs_created = 0
+        for class_name, indices in class_indices.items():
+            if len(indices) >= 2 and positive_pairs_created < available_pairs // 2:
+                for i in range(len(indices)):
+                    for j in range(i + 1, len(indices)):
+                        if positive_pairs_created >= available_pairs // 2:
+                            break
+                        pairs.append((indices[i], indices[j]))
+                        labels.append(1)  # Positivo
+                        positive_pairs_created += 1
+                    if positive_pairs_created >= available_pairs // 2:
+                        break
+        
+        # Crear pares negativos si necesitamos más
+        negative_pairs_needed = available_pairs - len(pairs)
+        negative_pairs_created = 0
+        
+        if negative_pairs_needed > 0 and num_classes > 1:
+            class_names = list(class_indices.keys())
+            
+            for _ in range(negative_pairs_needed):
+                if negative_pairs_created >= negative_pairs_needed:
+                    break
+                
+                class_a, class_b = np.random.choice(class_names, 2, replace=False)
                 idx_a = np.random.choice(class_indices[class_a])
                 idx_b = np.random.choice(class_indices[class_b])
-                labels.append(0)
-            else:
-                if len(class_indices) > 0:
-                    class_a = np.random.choice(list(class_indices.keys()))
-                    if len(class_indices[class_a]) >= 2:
-                        idx_a, idx_b = np.random.choice(class_indices[class_a], 2, replace=False)
-                        labels.append(1)
-                    else:
-                        idx_a = class_indices[class_a][0]
-                        idx_b = np.random.choice(len(dataset))
-                        labels.append(0)
-                else:
-                    idx_a = np.random.choice(len(dataset))
-                    idx_b = np.random.choice(len(dataset))
-                    labels.append(0)
-            
-            pairs.append((idx_a, idx_b))
+                
+                pairs.append((idx_a, idx_b))
+                labels.append(0)  # Negativo
+                negative_pairs_created += 1
         
+        print(f"Creados {len(pairs)} pares: {positive_pairs_created} positivos, {negative_pairs_created} negativos")
         return pairs, torch.tensor(labels, dtype=torch.float32)
     
     def train(self, data_directory, epochs=10, batch_size=16):
