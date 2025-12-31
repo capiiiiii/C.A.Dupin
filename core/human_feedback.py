@@ -3,6 +3,7 @@ Módulo para gestionar el loop de retroalimentación humana
 """
 
 import os
+import json
 from pathlib import Path
 from .image_matcher import ImageMatcher
 
@@ -17,6 +18,29 @@ class HumanFeedbackLoop:
         
         if not self.directorio.exists():
             raise ValueError(f"Directorio no encontrado: {directorio_imagenes}")
+        
+        self._load_feedback()
+    
+    def _load_feedback(self):
+        """Carga el feedback previo si existe."""
+        feedback_file = self.directorio / "feedback.json"
+        if feedback_file.exists():
+            try:
+                with open(feedback_file, 'r') as f:
+                    self.feedback_history = json.load(f)
+                print(f"Cargados {len(self.feedback_history)} registros de feedback previo")
+            except Exception as e:
+                print(f"Error cargando feedback: {e}")
+                self.feedback_history = []
+    
+    def _save_feedback(self):
+        """Guarda el feedback en un archivo JSON."""
+        feedback_file = self.directorio / "feedback.json"
+        try:
+            with open(feedback_file, 'w') as f:
+                json.dump(self.feedback_history, f, indent=2, default=str)
+        except Exception as e:
+            print(f"Error guardando feedback: {e}")
     
     def start(self):
         """Inicia el loop de retroalimentación interactivo."""
@@ -37,10 +61,11 @@ class HumanFeedbackLoop:
             print("1. Comparar dos imágenes")
             print("2. Buscar similares")
             print("3. Ver historial de feedback")
-            print("4. Salir")
+            print("4. Exportar feedback para entrenamiento")
+            print("5. Salir")
             
             try:
-                opcion = input("\nSeleccione una opción (1-4): ").strip()
+                opcion = input("\nSeleccione una opción (1-5): ").strip()
             except (EOFError, KeyboardInterrupt):
                 print("\n\nFinalizando sesión...")
                 break
@@ -52,6 +77,8 @@ class HumanFeedbackLoop:
             elif opcion == '3':
                 self._mostrar_historial()
             elif opcion == '4':
+                self._exportar_feedback()
+            elif opcion == '5':
                 print("Finalizando sesión...")
                 break
             else:
@@ -94,23 +121,25 @@ class HumanFeedbackLoop:
                 if feedback in ['s', 'si', 'sí', 'y', 'yes']:
                     print("✓ Feedback registrado: CORRECTO")
                     self.feedback_history.append({
-                        'img1': img1.name,
-                        'img2': img2.name,
+                        'img1': str(img1),
+                        'img2': str(img2),
                         'similitud': similitud,
                         'correcto': True
                     })
+                    self._save_feedback()
                 elif feedback in ['n', 'no']:
                     similitud_real = input("¿Cuál sería la similitud correcta? (0.0-1.0): ").strip()
                     try:
                         similitud_real = float(similitud_real)
                         print("✓ Feedback registrado: CORREGIDO")
                         self.feedback_history.append({
-                            'img1': img1.name,
-                            'img2': img2.name,
+                            'img1': str(img1),
+                            'img2': str(img2),
                             'similitud_calculada': similitud,
                             'similitud_real': similitud_real,
                             'correcto': False
                         })
+                        self._save_feedback()
                     except ValueError:
                         print("Valor no válido.")
             else:
@@ -164,3 +193,19 @@ class HumanFeedbackLoop:
                 print(f"   Calculada: {entry['similitud_calculada']:.2%}")
                 print(f"   Correcta: {entry['similitud_real']:.2%} - ✗ CORREGIDO")
             print()
+    
+    def _exportar_feedback(self):
+        """Exporta el feedback para ser usado en entrenamiento de modelo."""
+        if not self.feedback_history:
+            print("\nNo hay feedback para exportar.")
+            return
+        
+        feedback_file = self.directorio / "feedback.json"
+        print(f"\nFeedback guardado en: {feedback_file}")
+        print(f"Total de registros: {len(self.feedback_history)}")
+        print("\nPuedes usar este archivo para ajustar el modelo con:")
+        print("python dupin.py ajustar --feedback feedback.json --modelo modelo.pth")
+    
+    def get_feedback_data(self):
+        """Retorna los datos de feedback para uso externo."""
+        return self.feedback_history

@@ -45,6 +45,9 @@ ENV/
 models/
 checkpoints/
 
+# Human feedback data
+feedback.json
+
 # Data
 data/
 images/

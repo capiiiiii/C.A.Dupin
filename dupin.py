@@ -55,6 +55,29 @@ def modo_interactivo(directorio_imagenes):
     feedback_loop.start()
 
 
+def ajustar_modelo(modelo_path, feedback_path, output_path="modelo_ajustado.pth"):
+    """Ajusta un modelo usando retroalimentación humana."""
+    print(f"\n=== Ajustando Modelo con Feedback Humano ===")
+    
+    trainer = ModelTrainer()
+    
+    print(f"Cargando modelo desde: {modelo_path}")
+    modelo = trainer.load_model(modelo_path)
+    
+    print(f"Cargando feedback desde: {feedback_path}")
+    feedback_data = trainer.load_feedback(feedback_path)
+    
+    if not feedback_data:
+        print("No se encontró feedback para ajustar el modelo.")
+        return
+    
+    modelo_ajustado = trainer.fine_tune_with_feedback(modelo, feedback_data)
+    trainer.save_model(modelo_ajustado, output_path)
+    
+    print(f"\n✓ Modelo ajustado guardado en: {output_path}")
+    return modelo_ajustado
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='C.A.Dupin - Herramienta de coincidencias visuales asistidas por humanos'
@@ -75,6 +98,14 @@ def main():
     entrenar_parser.add_argument('--output', default='modelo.pth',
                                 help='Ruta para guardar el modelo')
     
+    ajustar_parser = subparsers.add_parser('ajustar', help='Ajustar modelo con feedback humano')
+    ajustar_parser.add_argument('--modelo', required=True,
+                               help='Ruta al modelo entrenado')
+    ajustar_parser.add_argument('--feedback', required=True,
+                               help='Ruta al archivo JSON con feedback')
+    ajustar_parser.add_argument('--output', default='modelo_ajustado.pth',
+                               help='Ruta para guardar el modelo ajustado')
+    
     interactivo_parser = subparsers.add_parser('interactivo',
                                                help='Modo interactivo con retroalimentación humana')
     interactivo_parser.add_argument('directorio', help='Directorio con imágenes a revisar')
@@ -85,6 +116,8 @@ def main():
         comparar_imagenes(args.imagen1, args.imagen2, args.umbral)
     elif args.comando == 'entrenar':
         entrenar_modelo(args.directorio, args.epochs, args.output)
+    elif args.comando == 'ajustar':
+        ajustar_modelo(args.modelo, args.feedback, args.output)
     elif args.comando == 'interactivo':
         modo_interactivo(args.directorio)
     else:
