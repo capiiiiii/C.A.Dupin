@@ -47,10 +47,14 @@ checkpoints/
 
 # Human feedback data
 feedback.json
+roi_feedback.json
+learning_data.json
 
 # Data
 data/
 images/
+user_patterns/
+rois_seleccionadas.json
 *.jpg
 *.jpeg
 *.png

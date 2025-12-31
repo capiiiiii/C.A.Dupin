@@ -29,6 +29,7 @@ from core.camera_manager import CameraManager
 from core.visual_interface import VisualInterface
 from core.language_manager import LanguageManager
 from core.module_manager import ModuleManager
+from core.pattern_learner import PatternLearner
 
 
 def configurar_idioma(language_manager, idioma):
@@ -313,6 +314,177 @@ def ajustar_modelo(modelo_path, feedback_path, output_path="modelo_ajustado.pth"
     return modelo_ajustado
 
 
+def definir_patron(nombre, descripcion="", imagen_path=None, roi=None, language_manager=None):
+    """Define un nuevo patrón visual para aprendizaje."""
+    pattern_learner = PatternLearner()
+    
+    print(f"\n=== Definir Patrón Visual ===")
+    print(f"Nombre: {nombre}")
+    if descripcion:
+        print(f"Descripción: {descripcion}")
+    if imagen_path:
+        print(f"Imagen de ejemplo: {imagen_path}")
+    if roi:
+        print(f"ROI: {roi}")
+    
+    pattern_id = pattern_learner.define_pattern(
+        name=nombre,
+        description=descripcion,
+        image_path=imagen_path,
+        roi=roi
+    )
+    
+    print(f"\n✓ Patrón definido con ID: {pattern_id}")
+    return pattern_id
+
+
+def entrenar_patrones(epochs=10, language_manager=None):
+    """Entrena el modelo con los patrones definidos por el usuario."""
+    pattern_learner = PatternLearner()
+    
+    print(f"\n=== Entrenando Patrones Definidos por Usuario ===")
+    
+    patterns = pattern_learner.list_patterns()
+    if not patterns:
+        print("No hay patrones definidos. Usa 'definir-patron' primero.")
+        return None
+    
+    print(f"Patrones a entrenar: {len(patterns)}")
+    for pattern in patterns:
+        print(f"  - {pattern['name']} (muestras: {pattern['samples']})")
+    
+    success = pattern_learner.train_patterns(epochs=epochs)
+    
+    if success:
+        print("\n✓ Entrenamiento de patrones completado")
+        return pattern_learner
+    else:
+        print("\n✗ Error en el entrenamiento de patrones")
+        return None
+
+
+def reconocer_patron(imagen_path, roi=None, threshold=0.5, language_manager=None):
+    """Reconoce patrones en una imagen."""
+    pattern_learner = PatternLearner()
+    
+    print(f"\n=== Reconocimiento de Patrones ===")
+    print(f"Imagen: {imagen_path}")
+    if roi:
+        print(f"ROI: {roi}")
+    print(f"Umbral de confianza: {threshold:.0%}")
+    
+    detections = pattern_learner.recognize_pattern(
+        image_path=imagen_path,
+        roi=roi,
+        threshold=threshold
+    )
+    
+    if detections:
+        print(f"\n✓ Encontrados {len(detections)} patrones:")
+        for detection in detections:
+            print(f"\n  Patrón: {detection['pattern_name']}")
+            print(f"  Probabilidad: {detection['probability']:.2%}")
+            print(f"  Confianza: {detection['probability']:.2%}")
+    else:
+        print("\nNo se encontraron patrones")
+    
+    return detections
+
+
+def listar_patrones(language_manager=None):
+    """Lista todos los patrones definidos por el usuario."""
+    pattern_learner = PatternLearner()
+    
+    patterns = pattern_learner.list_patterns()
+    
+    if not patterns:
+        print("\nNo hay patrones definidos.")
+        return
+    
+    print(f"\n=== Patrones Definidos ({len(patterns)}) ===\n")
+    
+    for pattern in patterns:
+        print(f"ID: {pattern['id']}")
+        print(f"Nombre: {pattern['name']}")
+        if pattern['description']:
+            print(f"Descripción: {pattern['description']}")
+        print(f"Muestras: {pattern['samples']}")
+        print(f"Aprobaciones: {pattern['approved']}")
+        print(f"Correcciones: {pattern['corrected']}")
+        if pattern['samples'] > 0:
+            print(f"Precisión: {pattern['accuracy']:.2%}")
+        print(f"Creado: {pattern['created_at'][:10]}")
+        print()
+
+
+def comparar_con_probabilidades(imagen1_path, imagen2_path, roi1=None, roi2=None, 
+                               metodo='orb', language_manager=None):
+    """Compara dos imágenes mostrando probabilidades detalladas."""
+    matcher = ImageMatcher(metodo=metodo)
+    
+    print(f"\n=== Comparación con Probabilidades Detalladas ===")
+    print(f"Imagen 1: {imagen1_path}")
+    if roi1:
+        print(f"  ROI 1: {roi1}")
+    print(f"Imagen 2: {imagen2_path}")
+    if roi2:
+        print(f"  ROI 2: {roi2}")
+    print(f"Método: {metodo.upper()}")
+    
+    result = matcher.compare_with_details(
+        imagen1_path, imagen2_path,
+        roi1=roi1, roi2=roi2
+    )
+    
+    print(f"\n📊 Resultados:")
+    print(f"  Similitud: {result['similarity']:.2%}")
+    print(f"\n📈 Probabilidades:")
+    
+    prob = result['probability']
+    print(f"  Similares:      {prob['similar']:.2%}")
+    print(f"  Idénticos:      {prob['identical']:.2%}")
+    print(f"  Diferentes:     {prob['different']:.2%}")
+    print(f"\n🔍 Nivel de confianza: {prob['confidence_level'].upper()}")
+    
+    if result['details']:
+        print(f"\n📋 Detalles técnicos:")
+        for key, value in result['details'].items():
+            print(f"  {key}: {value}")
+    
+    return result
+
+
+def aprobar_patron(imagen_path, roi=None, pattern_type='general', language_manager=None):
+    """Aprueba un patrón detectado para aprendizaje."""
+    directorio = Path(imagen_path).parent
+    feedback_loop = HumanFeedbackLoop(str(directorio))
+    
+    feedback_loop.approve_pattern(
+        image_path=imagen_path,
+        roi=roi,
+        pattern_type=pattern_type
+    )
+    
+    print(f"\n✓ Patrón aprobado para aprendizaje")
+    return True
+
+
+def corregir_patron(imagen_path, correction, roi=None, pattern_type='general', language_manager=None):
+    """Corrige un patrón detectado para aprendizaje."""
+    directorio = Path(imagen_path).parent
+    feedback_loop = HumanFeedbackLoop(str(directorio))
+    
+    feedback_loop.correct_pattern(
+        image_path=imagen_path,
+        roi=roi,
+        correction=correction,
+        pattern_type=pattern_type
+    )
+    
+    print(f"\n✓ Patrón corregido: {correction}")
+    return True
+
+
 def listar_modulos(language_manager=None):
     """Lista todos los módulos disponibles."""
     module_manager = ModuleManager()
@@ -450,12 +622,78 @@ Ejemplos de uso:
     modulos_parser = subparsers.add_parser('modulos', help='Listar módulos disponibles')
     
     # Comando: entrenar-módulos
-    entrenar_modulos_parser = subparsers.add_parser('entrenar-modulos', 
-                                                   help='Entrenar módulos específicos')
+    entrenar_modulos_parser = subparsers.add_parser('entrenar-modulos',
+                                                    help='Entrenar módulos específicos')
     entrenar_modulos_parser.add_argument('directorio', help='Directorio con datos de entrenamiento')
-    entrenar_modulos_parser.add_argument('--modules', nargs='+', 
-                                       help='IDs de módulos a entrenar (faces, stars, etc.)')
-    
+    entrenar_modulos_parser.add_argument('--modules', nargs='+',
+                                        help='IDs de módulos a entrenar (faces, stars, etc.)')
+
+    # Comando: definir-patron
+    definir_patron_parser = subparsers.add_parser('definir-patron',
+                                               help='Definir un nuevo patrón visual')
+    definir_patron_parser.add_argument('nombre', help='Nombre del patrón')
+    definir_patron_parser.add_argument('--descripcion', default='', help='Descripción del patrón')
+    definir_patron_parser.add_argument('--imagen', help='Imagen de ejemplo del patrón')
+    definir_patron_parser.add_argument('--roi', nargs=4, type=int,
+                                   metavar=('X', 'Y', 'W', 'H'),
+                                   help='Región de interés (x y w h)')
+
+    # Comando: entrenar-patrones
+    entrenar_patrones_parser = subparsers.add_parser('entrenar-patrones',
+                                                 help='Entrenar modelo con patrones definidos')
+    entrenar_patrones_parser.add_argument('--epochs', type=int, default=10,
+                                     help='Número de épocas')
+
+    # Comando: reconocer-patron
+    reconocer_patron_parser = subparsers.add_parser('reconocer-patron',
+                                                  help='Reconocer patrones en una imagen')
+    reconocer_patron_parser.add_argument('imagen', help='Ruta a la imagen')
+    reconocer_patron_parser.add_argument('--roi', nargs=4, type=int,
+                                      metavar=('X', 'Y', 'W', 'H'),
+                                      help='Región de interés (x y w h)')
+    reconocer_patron_parser.add_argument('--umbral', type=float, default=0.5,
+                                      help='Umbral de confianza (0.0-1.0)')
+
+    # Comando: listar-patrones
+    listar_patrones_parser = subparsers.add_parser('listar-patrones',
+                                               help='Listar patrones definidos')
+
+    # Comando: comparar-prob
+    comparar_prob_parser = subparsers.add_parser('comparar-prob',
+                                               help='Comparar imágenes con probabilidades detalladas')
+    comparar_prob_parser.add_argument('imagen1', help='Ruta a la primera imagen')
+    comparar_prob_parser.add_argument('imagen2', help='Ruta a la segunda imagen')
+    comparar_prob_parser.add_argument('--roi1', nargs=4, type=int,
+                                    metavar=('X', 'Y', 'W', 'H'),
+                                    help='ROI de imagen 1 (x y w h)')
+    comparar_prob_parser.add_argument('--roi2', nargs=4, type=int,
+                                    metavar=('X', 'Y', 'W', 'H'),
+                                    help='ROI de imagen 2 (x y w h)')
+    comparar_prob_parser.add_argument('--metodo', default='orb',
+                                    choices=['orb', 'sift', 'histogram', 'ssim'],
+                                    help='Método de comparación')
+
+    # Comando: aprobar
+    aprobar_parser = subparsers.add_parser('aprobar',
+                                         help='Aprobar un patrón detectado')
+    aprobar_parser.add_argument('imagen', help='Ruta a la imagen')
+    aprobar_parser.add_argument('--roi', nargs=4, type=int,
+                             metavar=('X', 'Y', 'W', 'H'),
+                             help='Región de interés (x y w h)')
+    aprobar_parser.add_argument('--tipo', default='general',
+                             help='Tipo de patrón')
+
+    # Comando: corregir
+    corregir_parser = subparsers.add_parser('corregir',
+                                          help='Corregir un patrón detectado')
+    corregir_parser.add_argument('imagen', help='Ruta a la imagen')
+    corregir_parser.add_argument('correccion', help='Texto de corrección')
+    corregir_parser.add_argument('--roi', nargs=4, type=int,
+                               metavar=('X', 'Y', 'W', 'H'),
+                               help='Región de interés (x y w h)')
+    corregir_parser.add_argument('--tipo', default='general',
+                               help='Tipo de patrón')
+
     args = parser.parse_args()
     
     # Inicializar gestor de idiomas
@@ -479,6 +717,49 @@ Ejemplos de uso:
         listar_modulos(language_manager)
     elif args.comando == 'entrenar-modulos':
         entrenar_modulos(args.directorio, args.modules, language_manager)
+    elif args.comando == 'definir-patron':
+        definir_patron(
+            nombre=args.nombre,
+            descripcion=args.descripcion,
+            imagen_path=args.imagen,
+            roi=tuple(args.roi) if args.roi else None,
+            language_manager=language_manager
+        )
+    elif args.comando == 'entrenar-patrones':
+        entrenar_patrones(epochs=args.epochs, language_manager=language_manager)
+    elif args.comando == 'reconocer-patron':
+        reconocer_patron(
+            imagen_path=args.imagen,
+            roi=tuple(args.roi) if args.roi else None,
+            threshold=args.umbral,
+            language_manager=language_manager
+        )
+    elif args.comando == 'listar-patrones':
+        listar_patrones(language_manager)
+    elif args.comando == 'comparar-prob':
+        comparar_con_probabilidades(
+            imagen1_path=args.imagen1,
+            imagen2_path=args.imagen2,
+            roi1=tuple(args.roi1) if args.roi1 else None,
+            roi2=tuple(args.roi2) if args.roi2 else None,
+            metodo=args.metodo,
+            language_manager=language_manager
+        )
+    elif args.comando == 'aprobar':
+        aprobar_patron(
+            imagen_path=args.imagen,
+            roi=tuple(args.roi) if args.roi else None,
+            pattern_type=args.tipo,
+            language_manager=language_manager
+        )
+    elif args.comando == 'corregir':
+        corregir_patron(
+            imagen_path=args.imagen,
+            correction=args.correccion,
+            roi=tuple(args.roi) if args.roi else None,
+            pattern_type=args.tipo,
+            language_manager=language_manager
+        )
     else:
         parser.print_help()
         return 1

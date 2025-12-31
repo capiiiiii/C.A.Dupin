@@ -5,6 +5,7 @@ Módulo para gestionar el loop de retroalimentación humana
 import os
 import json
 from pathlib import Path
+from datetime import datetime
 from .image_matcher import ImageMatcher
 
 
@@ -15,11 +16,13 @@ class HumanFeedbackLoop:
         self.directorio = Path(directorio_imagenes)
         self.matcher = ImageMatcher()
         self.feedback_history = []
+        self.roi_feedback = {}  # ROI-specific feedback
         
         if not self.directorio.exists():
             raise ValueError(f"Directorio no encontrado: {directorio_imagenes}")
         
         self._load_feedback()
+        self._load_roi_feedback()
     
     def _load_feedback(self):
         """Carga el feedback previo si existe."""
@@ -33,6 +36,18 @@ class HumanFeedbackLoop:
                 print(f"Error cargando feedback: {e}")
                 self.feedback_history = []
     
+    def _load_roi_feedback(self):
+        """Carga el feedback específico de ROIs si existe."""
+        roi_feedback_file = self.directorio / "roi_feedback.json"
+        if roi_feedback_file.exists():
+            try:
+                with open(roi_feedback_file, 'r') as f:
+                    self.roi_feedback = json.load(f)
+                print(f"Cargados {len(self.roi_feedback)} registros de feedback de ROI")
+            except Exception as e:
+                print(f"Error cargando feedback de ROI: {e}")
+                self.roi_feedback = {}
+    
     def _save_feedback(self):
         """Guarda el feedback en un archivo JSON."""
         feedback_file = self.directorio / "feedback.json"
@@ -41,6 +56,15 @@ class HumanFeedbackLoop:
                 json.dump(self.feedback_history, f, indent=2, default=str)
         except Exception as e:
             print(f"Error guardando feedback: {e}")
+    
+    def _save_roi_feedback(self):
+        """Guarda el feedback específico de ROIs en un archivo JSON."""
+        roi_feedback_file = self.directorio / "roi_feedback.json"
+        try:
+            with open(roi_feedback_file, 'w') as f:
+                json.dump(self.roi_feedback, f, indent=2, default=str)
+        except Exception as e:
+            print(f"Error guardando feedback de ROI: {e}")
     
     def start(self):
         """Inicia el loop de retroalimentación interactivo."""
@@ -209,3 +233,128 @@ class HumanFeedbackLoop:
     def get_feedback_data(self):
         """Retorna los datos de feedback para uso externo."""
         return self.feedback_history
+    
+    def add_roi_feedback(self, image_path, roi, comparison_result, is_correct, correction=None):
+        """
+        Añade feedback específico para una comparación de ROI.
+        
+        Args:
+            image_path: Ruta a la imagen
+            roi: Región de interés (x, y, w, h)
+            comparison_result: Resultado de la comparación
+            is_correct: Si el resultado fue correcto
+            correction: Corrección si no fue correcto
+        """
+        feedback_key = f"{Path(image_path).name}_{roi[0]}_{roi[1]}_{roi[2]}_{roi[3]}"
+        
+        feedback_entry = {
+            'image_path': str(image_path),
+            'roi': roi,
+            'comparison_result': comparison_result,
+            'is_correct': is_correct,
+            'correction': correction,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        self.roi_feedback[feedback_key] = feedback_entry
+        self._save_roi_feedback()
+        print(f"✓ Feedback de ROI registrado para {feedback_key}")
+    
+    def approve_pattern(self, image_path, roi=None, pattern_type='general'):
+        """
+        Aprueba un patrón detectado para aprendizaje futuro.
+        
+        Args:
+            image_path: Ruta a la imagen
+            roi: Región de interés (opcional)
+            pattern_type: Tipo de patrón
+        """
+        feedback_entry = {
+            'type': 'approval',
+            'image_path': str(image_path),
+            'roi': roi,
+            'pattern_type': pattern_type,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        self.feedback_history.append(feedback_entry)
+        self._save_feedback()
+        print(f"✓ Patrón aprobado: {pattern_type}")
+    
+    def correct_pattern(self, image_path, roi=None, correction='', pattern_type='general'):
+        """
+        Corrige un patrón detectado para aprendizaje futuro.
+        
+        Args:
+            image_path: Ruta a la imagen
+            roi: Región de interés (opcional)
+            correction: Texto de corrección
+            pattern_type: Tipo de patrón
+        """
+        feedback_entry = {
+            'type': 'correction',
+            'image_path': str(image_path),
+            'roi': roi,
+            'pattern_type': pattern_type,
+            'correction': correction,
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        self.feedback_history.append(feedback_entry)
+        self._save_feedback()
+        print(f"✓ Patrón corregido: {pattern_type} -> {correction}")
+    
+    def get_roi_statistics(self):
+        """
+        Obtiene estadísticas del feedback de ROIs.
+        
+        Returns:
+            dict: Estadísticas de feedback de ROIs
+        """
+        total = len(self.roi_feedback)
+        approved = sum(1 for f in self.roi_feedback.values() if f.get('is_correct', False))
+        corrected = total - approved
+        
+        return {
+            'total_feedback': total,
+            'approved': approved,
+            'corrected': corrected,
+            'approval_rate': approved / total if total > 0 else 0.0
+        }
+    
+    def export_learning_data(self, output_path='learning_data.json'):
+        """
+        Exporta todos los datos de feedback para aprendizaje de modelos.
+        
+        Args:
+            output_path: Ruta del archivo de salida
+        """
+        learning_data = {
+            'image_feedback': self.feedback_history,
+            'roi_feedback': self.roi_feedback,
+            'statistics': {
+                'total_image_feedback': len(self.feedback_history),
+                'total_roi_feedback': len(self.roi_feedback),
+                'roi_stats': self.get_roi_statistics()
+            },
+            'exported_at': datetime.now().isoformat()
+        }
+        
+        try:
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(learning_data, f, indent=2, ensure_ascii=False, default=str)
+            print(f"✓ Datos de aprendizaje exportados a: {output_path}")
+        except Exception as e:
+            print(f"Error exportando datos de aprendizaje: {e}")
+    
+    def batch_approve_corrections(self, image_paths, corrections):
+        """
+        Aprueba múltiples correcciones en lote.
+        
+        Args:
+            image_paths: Lista de rutas de imágenes
+            corrections: Lista de correcciones correspondientes
+        """
+        for img_path, correction in zip(image_paths, corrections):
+            self.correct_pattern(img_path, correction=correction)
+        print(f"✓ {len(image_paths)} correcciones aprobadas en lote")
