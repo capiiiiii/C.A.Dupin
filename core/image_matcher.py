@@ -36,19 +36,30 @@ class ImageMatcher:
         
         return imagen
     
-    def compare(self, imagen1_path, imagen2_path):
+    def compare(self, imagen1_path, imagen2_path, roi1=None, roi2=None):
         """
         Compara dos imágenes y retorna un score de similitud (0.0 - 1.0).
         
         Args:
             imagen1_path: Ruta a la primera imagen
             imagen2_path: Ruta a la segunda imagen
+            roi1: Región de interés en imagen 1 (x, y, w, h) - opcional
+            roi2: Región de interés en imagen 2 (x, y, w, h) - opcional
             
         Returns:
             float: Score de similitud entre 0.0 y 1.0
         """
         img1 = self.cargar_imagen(imagen1_path)
         img2 = self.cargar_imagen(imagen2_path)
+        
+        # Extraer ROIs si se especifican
+        if roi1:
+            x, y, w, h = roi1
+            img1 = img1[y:y+h, x:x+w]
+        
+        if roi2:
+            x, y, w, h = roi2
+            img2 = img2[y:y+h, x:x+w]
         
         if self.metodo in ['orb', 'sift']:
             return self._compare_features(img1, img2)
@@ -58,6 +69,65 @@ class ImageMatcher:
             return self._compare_ssim(img1, img2)
         else:
             return self._compare_features(img1, img2)
+    
+    def compare_with_details(self, imagen1_path, imagen2_path, roi1=None, roi2=None):
+        """
+        Compara dos imágenes y retorna detalles completos de la comparación.
+        
+        Args:
+            imagen1_path: Ruta a la primera imagen
+            imagen2_path: Ruta a la segunda imagen
+            roi1: Región de interés en imagen 1 (x, y, w, h) - opcional
+            roi2: Región de interés en imagen 2 (x, y, w, h) - opcional
+            
+        Returns:
+            dict: Detalles de la comparación incluyendo similitud, método usado, etc.
+        """
+        img1 = self.cargar_imagen(imagen1_path)
+        img2 = self.cargar_imagen(imagen2_path)
+        
+        # Extraer ROIs si se especifican
+        original_img1 = img1.copy()
+        original_img2 = img2.copy()
+        
+        if roi1:
+            x, y, w, h = roi1
+            img1 = img1[y:y+h, x:x+w]
+        
+        if roi2:
+            x, y, w, h = roi2
+            img2 = img2[y:y+h, x:x+w]
+        
+        # Realizar comparación con cada método
+        results = {
+            'similarity': 0.0,
+            'method': self.metodo,
+            'image1_path': str(imagen1_path),
+            'image2_path': str(imagen2_path),
+            'roi1': roi1,
+            'roi2': roi2,
+            'details': {}
+        }
+        
+        if self.metodo in ['orb', 'sift']:
+            similarity, features_details = self._compare_features_with_details(img1, img2)
+            results['similarity'] = similarity
+            results['details'] = features_details
+        elif self.metodo == 'histogram':
+            similarity = self._compare_histogram(img1, img2)
+            results['similarity'] = similarity
+        elif self.metodo == 'ssim':
+            similarity = self._compare_ssim(img1, img2)
+            results['similarity'] = similarity
+        else:
+            similarity, features_details = self._compare_features_with_details(img1, img2)
+            results['similarity'] = similarity
+            results['details'] = features_details
+        
+        # Calcular probabilidad de similitud
+        results['probability'] = self._calculate_probability(results['similarity'])
+        
+        return results
     
     def _compare_features(self, img1, img2):
         """Compara imágenes usando detección de características."""
@@ -129,3 +199,122 @@ class ImageMatcher:
         
         resultados.sort(key=lambda x: x[1], reverse=True)
         return resultados[:top_n]
+    
+    def _compare_features_with_details(self, img1, img2):
+        """
+        Compara imágenes usando detección de características y retorna detalles.
+        
+        Returns:
+            tuple: (similitud, detalles)
+        """
+        gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
+        gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+        
+        kp1, des1 = self.detector.detectAndCompute(gray1, None)
+        kp2, des2 = self.detector.detectAndCompute(gray2, None)
+        
+        details = {
+            'keypoints1': len(kp1) if kp1 is not None else 0,
+            'keypoints2': len(kp2) if kp2 is not None else 0,
+            'matches': 0,
+            'good_matches': 0,
+            'match_distance_avg': 0.0
+        }
+        
+        if des1 is None or des2 is None:
+            return 0.0, details
+        
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = bf.match(des1, des2)
+        matches = sorted(matches, key=lambda x: x.distance)
+        
+        details['matches'] = len(matches)
+        
+        if len(matches) == 0:
+            return 0.0, details
+        
+        good_matches = [m for m in matches if m.distance < 50]
+        details['good_matches'] = len(good_matches)
+        
+        if good_matches:
+            details['match_distance_avg'] = np.mean([m.distance for m in good_matches])
+        
+        score = len(good_matches) / max(len(kp1), len(kp2))
+        
+        return min(score, 1.0), details
+    
+    def _calculate_probability(self, similarity: float) -> Dict[str, float]:
+        """
+        Calcula probabilidades basadas en la similitud.
+        
+        Args:
+            similarity: Score de similitud (0.0 - 1.0)
+            
+        Returns:
+            dict: Diccionario con diferentes probabilidades
+        """
+        # Probabilidad de que sean similares
+        prob_similar = similarity
+        
+        # Probabilidad de que sean idénticos
+        prob_identical = min(similarity ** 2, 1.0)
+        
+        # Probabilidad de que sean diferentes
+        prob_different = 1.0 - similarity
+        
+        # Nivel de confianza
+        if similarity > 0.9:
+            confidence_level = "muy alta"
+        elif similarity > 0.7:
+            confidence_level = "alta"
+        elif similarity > 0.5:
+            confidence_level = "media"
+        elif similarity > 0.3:
+            confidence_level = "baja"
+        else:
+            confidence_level = "muy baja"
+        
+        return {
+            'similar': prob_similar,
+            'identical': prob_identical,
+            'different': prob_different,
+            'confidence_level': confidence_level
+        }
+    
+    def compare_multiple_rois(self, imagen1_path, imagen2_path, rois1, rois2):
+        """
+        Compara múltiples ROIs entre dos imágenes.
+        
+        Args:
+            imagen1_path: Ruta a la primera imagen
+            imagen2_path: Ruta a la segunda imagen
+            rois1: Lista de ROIs para imagen 1 [(x,y,w,h), ...]
+            rois2: Lista de ROIs para imagen 2 [(x,y,w,h), ...]
+            
+        Returns:
+            list: Lista de resultados de comparación
+        """
+        results = []
+        
+        img1 = self.cargar_imagen(imagen1_path)
+        img2 = self.cargar_imagen(imagen2_path)
+        
+        for i, (roi1, roi2) in enumerate(zip(rois1, rois2)):
+            x1, y1, w1, h1 = roi1
+            x2, y2, w2, h2 = roi2
+            
+            roi1_img = img1[y1:y1+h1, x1:x1+w1]
+            roi2_img = img2[y2:y2+h2, x2:x2+w2]
+            
+            similarity = self._compare_features(roi1_img, roi2_img)
+            probability = self._calculate_probability(similarity)
+            
+            results.append({
+                'pair_id': i,
+                'roi1': roi1,
+                'roi2': roi2,
+                'similarity': similarity,
+                'probability': probability
+            })
+        
+        return results
