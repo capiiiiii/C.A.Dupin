@@ -42,7 +42,18 @@ python dupin.py comparar imagen1.jpg imagen2.jpg --umbral 0.9
 python dupin.py entrenar ./directorio_datos --epochs 20 --output mi_modelo.pth
 ```
 
-### Modo interactivo
+**Nota**: El directorio de entrenamiento debe tener imágenes organizadas en subdirectorios por clase:
+```
+directorio_datos/
+├── clase_a/
+│   ├── imagen1.jpg
+│   └── imagen2.jpg
+└── clase_b/
+    ├── imagen3.jpg
+    └── imagen4.jpg
+```
+
+### Modo interactivo (Human-in-the-Loop)
 
 ```bash
 python dupin.py interactivo ./directorio_imagenes
@@ -53,6 +64,19 @@ El modo interactivo permite:
 - Buscar imágenes similares
 - Proporcionar feedback sobre las coincidencias
 - Corregir resultados del modelo en tiempo real
+- Exportar feedback para mejorar el modelo
+
+Durante el modo interactivo, el feedback se guarda automáticamente en `feedback.json`.
+
+### Ajustar modelo con feedback humano
+
+Una vez que hayas recopilado feedback humano, puedes usarlo para ajustar el modelo:
+
+```bash
+python dupin.py ajustar --modelo mi_modelo.pth --feedback feedback.json --output modelo_ajustado.pth
+```
+
+Esto mejora el modelo basándose en las correcciones que los humanos han proporcionado.
 
 ## Estructura del proyecto
 

@@ -5,9 +5,11 @@ Módulo para entrenar modelos de comparación de imágenes
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
 from pathlib import Path
 from PIL import Image
 import numpy as np
+import cv2
 
 
 class SiameseNetwork(nn.Module):
@@ -31,10 +33,13 @@ class SiameseNetwork(nn.Module):
             
             nn.Conv2d(256, 512, kernel_size=4, stride=1),
             nn.ReLU(inplace=True),
+            nn.MaxPool2d(kernel_size=2, stride=2),
         )
         
         self.fc = nn.Sequential(
-            nn.Linear(512 * 6 * 6, 4096),
+            nn.Linear(512 * 2 * 2, 2048),
+            nn.ReLU(inplace=True),
+            nn.Linear(2048, 512),
             nn.Sigmoid()
         )
     
@@ -64,6 +69,53 @@ class ContrastiveLoss(nn.Module):
         return loss
 
 
+class ImagePairDataset(Dataset):
+    """Dataset para generar pares de imágenes con sus etiquetas."""
+    
+    def __init__(self, data_directory, transform=None):
+        """
+        Inicializa el dataset con imágenes del directorio.
+        
+        Args:
+            data_directory: Directorio con imágenes organizadas por clases
+            transform: Transformaciones a aplicar a las imágenes
+        """
+        self.data_path = Path(data_directory)
+        self.transform = transform
+        self.images = []
+        self.labels = []
+        self._load_data()
+    
+    def _load_data(self):
+        """Carga las imágenes desde el directorio."""
+        if not self.data_path.exists():
+            raise ValueError(f"Directorio no encontrado: {self.data_path}")
+        
+        extensiones = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff'}
+        
+        for subdir in self.data_path.iterdir():
+            if subdir.is_dir():
+                label = subdir.name
+                for img_file in subdir.iterdir():
+                    if img_file.suffix.lower() in extensiones:
+                        self.images.append(str(img_file))
+                        self.labels.append(label)
+        
+        print(f"Cargadas {len(self.images)} imágenes de {len(set(self.labels))} clases")
+    
+    def __len__(self):
+        return len(self.images)
+    
+    def __getitem__(self, idx):
+        img_path = self.images[idx]
+        image = Image.open(img_path).convert('RGB')
+        
+        if self.transform:
+            image = self.transform(image)
+        
+        return image, self.labels[idx]
+
+
 class ModelTrainer:
     """Entrenador de modelos para comparación de imágenes."""
     
@@ -72,7 +124,47 @@ class ModelTrainer:
         self.learning_rate = learning_rate
         print(f"Usando dispositivo: {self.device}")
     
-    def train(self, data_directory, epochs=10, batch_size=32):
+    def _create_pairs(self, dataset):
+        """Crea pares de imágenes y sus etiquetas para entrenamiento siamés."""
+        pairs = []
+        labels = []
+        
+        num_classes = len(set(dataset.labels))
+        class_indices = {}
+        
+        for idx, label in enumerate(dataset.labels):
+            if label not in class_indices:
+                class_indices[label] = []
+            class_indices[label].append(idx)
+        
+        num_pairs = min(len(dataset) * 2, 1000)
+        
+        for _ in range(num_pairs):
+            if np.random.random() > 0.5 and num_classes > 1:
+                class_a, class_b = np.random.choice(list(class_indices.keys()), 2, replace=False)
+                idx_a = np.random.choice(class_indices[class_a])
+                idx_b = np.random.choice(class_indices[class_b])
+                labels.append(0)
+            else:
+                if len(class_indices) > 0:
+                    class_a = np.random.choice(list(class_indices.keys()))
+                    if len(class_indices[class_a]) >= 2:
+                        idx_a, idx_b = np.random.choice(class_indices[class_a], 2, replace=False)
+                        labels.append(1)
+                    else:
+                        idx_a = class_indices[class_a][0]
+                        idx_b = np.random.choice(len(dataset))
+                        labels.append(0)
+                else:
+                    idx_a = np.random.choice(len(dataset))
+                    idx_b = np.random.choice(len(dataset))
+                    labels.append(0)
+            
+            pairs.append((idx_a, idx_b))
+        
+        return pairs, torch.tensor(labels, dtype=torch.float32)
+    
+    def train(self, data_directory, epochs=10, batch_size=16):
         """
         Entrena un modelo con los datos del directorio especificado.
         
@@ -95,6 +187,21 @@ class ModelTrainer:
         
         print(f"Cargando datos de entrenamiento desde {data_directory}...")
         
+        from torchvision import transforms
+        
+        transform = transforms.Compose([
+            transforms.Resize((100, 100)),
+            transforms.ToTensor(),
+        ])
+        
+        dataset = ImagePairDataset(data_directory, transform=transform)
+        
+        if len(dataset) == 0:
+            raise ValueError("No se encontraron imágenes para entrenar.")
+        
+        pairs, pair_labels = self._create_pairs(dataset)
+        print(f"Creados {len(pairs)} pares para entrenamiento")
+        
         for epoch in range(epochs):
             model.train()
             epoch_loss = 0.0
@@ -103,10 +210,37 @@ class ModelTrainer:
             print(f"\nÉpoca {epoch + 1}/{epochs}")
             print("-" * 40)
             
-            epoch_loss = np.random.random() * 2.0
-            print(f"Pérdida promedio: {epoch_loss:.4f}")
+            for i in range(0, len(pairs), batch_size):
+                batch_pairs = pairs[i:i + batch_size]
+                batch_labels = pair_labels[i:i + batch_size]
+                
+                batch_imgs1 = []
+                batch_imgs2 = []
+                
+                for idx1, idx2 in batch_pairs:
+                    img1, _ = dataset[idx1]
+                    img2, _ = dataset[idx2]
+                    batch_imgs1.append(img1)
+                    batch_imgs2.append(img2)
+                
+                batch_imgs1 = torch.stack(batch_imgs1).to(self.device)
+                batch_imgs2 = torch.stack(batch_imgs2).to(self.device)
+                batch_labels = batch_labels[:len(batch_pairs)].to(self.device)
+                
+                optimizer.zero_grad()
+                output1, output2 = model(batch_imgs1, batch_imgs2)
+                loss = criterion(output1, output2, batch_labels)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                num_batches += 1
             
-            num_batches += 1
+            if num_batches > 0:
+                avg_loss = epoch_loss / num_batches
+                print(f"Pérdida promedio: {avg_loss:.4f}")
+            else:
+                print("No se procesaron batches en esta época")
         
         print(f"\n✓ Entrenamiento completado")
         return model
@@ -135,3 +269,121 @@ class ModelTrainer:
         
         print(f"Precisión: {accuracy:.2%}")
         return accuracy
+    
+    def fine_tune_with_feedback(self, model, feedback_data, epochs=5, batch_size=16):
+        """
+        Ajusta el modelo usando retroalimentación humana.
+        
+        Args:
+            model: Modelo pre-entrenado
+            feedback_data: Lista de diccionarios con feedback humano
+            epochs: Número de épocas de ajuste
+            batch_size: Tamaño del batch
+            
+        Returns:
+            SiameseNetwork: Modelo ajustado
+        """
+        if not feedback_data:
+            print("No hay feedback para ajustar el modelo.")
+            return model
+        
+        print(f"\nAjustando modelo con {len(feedback_data)} correcciones humanas...")
+        
+        criterion = ContrastiveLoss()
+        optimizer = optim.Adam(model.parameters(), lr=self.learning_rate * 0.1)
+        
+        from torchvision import transforms
+        
+        transform = transforms.Compose([
+            transforms.Resize((100, 100)),
+            transforms.ToTensor(),
+        ])
+        
+        pairs = []
+        labels = []
+        
+        for entry in feedback_data:
+            if 'correcto' in entry:
+                img1_path = entry.get('img1', '')
+                img2_path = entry.get('img2', '')
+                
+                if Path(img1_path).exists() and Path(img2_path).exists():
+                    try:
+                        img1 = Image.open(img1_path).convert('RGB')
+                        img2 = Image.open(img2_path).convert('RGB')
+                        
+                        img1_tensor = transform(img1)
+                        img2_tensor = transform(img2)
+                        
+                        if entry['correcto']:
+                            similarity = entry.get('similitud', 0.5)
+                            label = 1.0 if similarity > 0.7 else 0.0
+                        else:
+                            similarity = entry.get('similitud_real', 0.5)
+                            label = 1.0 if similarity > 0.7 else 0.0
+                        
+                        pairs.append((img1_tensor, img2_tensor))
+                        labels.append(label)
+                    except Exception as e:
+                        print(f"Error cargando par de imágenes: {e}")
+                        continue
+        
+        if len(pairs) == 0:
+            print("No se pudieron cargar pares válidos del feedback.")
+            return model
+        
+        labels = torch.tensor(labels, dtype=torch.float32).to(self.device)
+        
+        for epoch in range(epochs):
+            model.train()
+            epoch_loss = 0.0
+            num_batches = 0
+            
+            print(f"\nÉpoca de ajuste {epoch + 1}/{epochs}")
+            print("-" * 40)
+            
+            for i in range(0, len(pairs), batch_size):
+                batch_pairs = pairs[i:i + batch_size]
+                batch_labels = labels[i:i + batch_size]
+                
+                batch_imgs1 = torch.stack([p[0] for p in batch_pairs]).to(self.device)
+                batch_imgs2 = torch.stack([p[1] for p in batch_pairs]).to(self.device)
+                
+                optimizer.zero_grad()
+                output1, output2 = model(batch_imgs1, batch_imgs2)
+                loss = criterion(output1, output2, batch_labels)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                num_batches += 1
+            
+            if num_batches > 0:
+                avg_loss = epoch_loss / num_batches
+                print(f"Pérdida promedio: {avg_loss:.4f}")
+        
+        print(f"\n✓ Ajuste con feedback completado")
+        return model
+    
+    def save_feedback(self, feedback_data, output_path="feedback.json"):
+        """Guarda el feedback humano en un archivo JSON."""
+        import json
+        
+        with open(output_path, 'w') as f:
+            json.dump(feedback_data, f, indent=2, default=str)
+        
+        print(f"Feedback guardado en: {output_path}")
+    
+    def load_feedback(self, feedback_path="feedback.json"):
+        """Carga el feedback humano desde un archivo JSON."""
+        import json
+        
+        if not Path(feedback_path).exists():
+            print(f"Archivo de feedback no encontrado: {feedback_path}")
+            return []
+        
+        with open(feedback_path, 'r') as f:
+            feedback_data = json.load(f)
+        
+        print(f"Cargados {len(feedback_data)} registros de feedback")
+        return feedback_data
