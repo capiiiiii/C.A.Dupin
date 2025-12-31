@@ -140,9 +140,8 @@ class CameraManager:
                     except Exception as e:
                         print(f"Error en callback de frame: {e}")
                 
-                # Mostrar frame en ventana si no hay callback personalizado
-                if not self.frame_callback:
-                    self._display_frame(frame)
+                # Mostrar frame en ventana
+                self.display_frame(frame)
                 
                 # Manejar grabación
                 if self.recording and self.video_writer:
@@ -159,30 +158,36 @@ class CameraManager:
                 print(f"Error en captura: {e}")
                 time.sleep(0.1)
     
-    def _display_frame(self, frame: np.ndarray):
-        """Muestra el frame en una ventana."""
-        # Agregar información de estado
+    def display_frame(self, frame: np.ndarray, show_info: bool = True):
+        """
+        Muestra el frame en una ventana.
+        
+        Args:
+            frame: Frame a mostrar
+            show_info: Si se debe mostrar la información de estado (FPS, etc.)
+        """
         display_frame = frame.copy()
         
-        # Mostrar FPS
-        fps_text = f"FPS: {self.stats['frames_per_second']:.1f}"
-        cv2.putText(display_frame, fps_text, (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        # Mostrar número de frame
-        frame_text = f"Frame: {self.frame_count}"
-        cv2.putText(display_frame, frame_text, (10, 60), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        # Mostrar estado de grabación
-        if self.recording:
-            cv2.putText(display_frame, "● REC", (display_frame.shape[1] - 100, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        
-        # Mostrar controles
-        cv2.putText(display_frame, "ESC: salir | SPC: foto | R: grabar", 
-                   (10, display_frame.shape[0] - 20), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        if show_info:
+            # Mostrar FPS
+            fps_text = f"FPS: {self.stats['frames_per_second']:.1f}"
+            cv2.putText(display_frame, fps_text, (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # Mostrar número de frame
+            frame_text = f"Frame: {self.frame_count}"
+            cv2.putText(display_frame, frame_text, (10, 60), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # Mostrar estado de grabación
+            if self.recording:
+                cv2.putText(display_frame, "● REC", (display_frame.shape[1] - 100, 30), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
+            # Mostrar controles
+            cv2.putText(display_frame, "ESC: salir | SPC: foto | R: grabar", 
+                       (10, display_frame.shape[0] - 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         cv2.imshow("C.A. Dupin - Camera Live", display_frame)
         

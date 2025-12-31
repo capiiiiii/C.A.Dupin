@@ -330,7 +330,7 @@ class PatternLearner:
         return True
     
     def recognize_pattern(self, image_path: str, roi: Tuple[int, int, int, int] = None,
-                        threshold: float = 0.5) -> List[Dict]:
+                        threshold: float = 0.5, include_reasoning: bool = False) -> List[Dict]:
         """
         Reconoce patrones en una imagen.
         
@@ -338,6 +338,7 @@ class PatternLearner:
             image_path: Ruta a la imagen
             roi: Región de interés (x, y, w, h)
             threshold: Umbral de confianza mínimo
+            include_reasoning: Si se debe incluir información de razonamiento (heatmap)
             
         Returns:
             Lista de detecciones encontradas
@@ -347,16 +348,21 @@ class PatternLearner:
             return []
         
         # Cargar modelo
-        checkpoint = torch.load(self.model_path, map_location=self.device)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.model.eval()
+        try:
+            checkpoint = torch.load(self.model_path, map_location=self.device)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.model.eval()
+        except Exception as e:
+            print(f"Error cargando el modelo: {e}")
+            return []
         
         # Cargar imagen
-        image = cv2.imread(str(image_path))
-        if image is None:
+        full_image = cv2.imread(str(image_path))
+        if full_image is None:
             print(f"No se pudo cargar imagen: {image_path}")
             return []
         
+        image = full_image
         # Extraer ROI si existe
         if roi:
             x, y, w, h = roi
@@ -387,18 +393,52 @@ class PatternLearner:
             if prob >= threshold and i < len(pattern_ids):
                 pattern_id = pattern_ids[i]
                 pattern = self.patterns[pattern_id]
-                detections.append({
+                
+                detection = {
                     'pattern_id': pattern_id,
                     'pattern_name': pattern['name'],
                     'probability': float(prob),
-                    'bbox': roi if roi else (0, 0, image.shape[1], image.shape[0])
-                })
+                    'bbox': roi if roi else (0, 0, full_image.shape[1], full_image.shape[0])
+                }
+                
+                if include_reasoning:
+                    detection['heatmap'] = self._generate_heatmap(image_tensor, i)
+                
+                detections.append(detection)
         
         # Ordenar por probabilidad
         detections.sort(key=lambda x: x['probability'], reverse=True)
         
         return detections
-    
+
+    def _generate_heatmap(self, image_tensor: torch.Tensor, class_idx: int) -> np.ndarray:
+        """Genera un mapa de calor (razonamiento) para una clase específica."""
+        self.model.eval()
+        
+        # Activar gradientes para el tensor de entrada
+        input_image = image_tensor.clone().detach().requires_grad_(True)
+        
+        # Forward pass
+        output = self.model(input_image)
+        
+        # Target score
+        target = output[0][class_idx]
+        
+        # Backward pass para obtener gradientes con respecto a la entrada
+        self.model.zero_grad()
+        target.backward()
+        
+        # Obtener gradientes y calcular magnitud
+        gradients = input_image.grad.data[0].cpu().numpy()
+        gradients = np.transpose(gradients, (1, 2, 0))
+        heatmap = np.max(np.abs(gradients), axis=2)
+        
+        # Normalizar heatmap
+        if heatmap.max() > 0:
+            heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())
+            
+        return heatmap
+
     def record_feedback(self, pattern_id: str, is_correct: bool, 
                       correction: str = None) -> bool:
         """

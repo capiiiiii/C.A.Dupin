@@ -200,19 +200,24 @@ class ImageMatcher:
         resultados.sort(key=lambda x: x[1], reverse=True)
         return resultados[:top_n]
     
-    def _compare_features_with_details(self, img1, img2):
+    def _compare_features_with_details(self, img1, img2, return_raw=False):
         """
         Compara imágenes usando detección de características y retorna detalles.
-        
+
+        Args:
+            img1: Primera imagen
+            img2: Segunda imagen
+            return_raw: Si se deben retornar los keypoints y matches originales
+
         Returns:
-            tuple: (similitud, detalles)
+            tuple: (similitud, detalles, raw_data si return_raw es True)
         """
         gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
         gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-        
+
         kp1, des1 = self.detector.detectAndCompute(gray1, None)
         kp2, des2 = self.detector.detectAndCompute(gray2, None)
-        
+
         details = {
             'keypoints1': len(kp1) if kp1 is not None else 0,
             'keypoints2': len(kp2) if kp2 is not None else 0,
@@ -220,29 +225,35 @@ class ImageMatcher:
             'good_matches': 0,
             'match_distance_avg': 0.0
         }
-        
+
+        raw_data = {'kp1': kp1, 'kp2': kp2, 'matches': [], 'good_matches': []}
+
         if des1 is None or des2 is None:
-            return 0.0, details
-        
+            return (0.0, details, raw_data) if return_raw else (0.0, details)
+
         bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
         matches = bf.match(des1, des2)
         matches = sorted(matches, key=lambda x: x.distance)
-        
+
         details['matches'] = len(matches)
-        
+        raw_data['matches'] = matches
+
         if len(matches) == 0:
-            return 0.0, details
-        
+            return (0.0, details, raw_data) if return_raw else (0.0, details)
+
         good_matches = [m for m in matches if m.distance < 50]
         details['good_matches'] = len(good_matches)
-        
+        raw_data['good_matches'] = good_matches
+
         if good_matches:
             details['match_distance_avg'] = np.mean([m.distance for m in good_matches])
-        
+
         score = len(good_matches) / max(len(kp1), len(kp2))
-        
+
+        if return_raw:
+            return min(score, 1.0), details, raw_data
         return min(score, 1.0), details
-    
+
     def _calculate_probability(self, similarity: float) -> Dict[str, float]:
         """
         Calcula probabilidades basadas en la similitud.
