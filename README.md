@@ -1,132 +1,98 @@
-# C.A.Dupin
+# C.A. Dupin
 
-Chevalier Auguste Dupin es una herramienta abierta de coincidencias visuales asistidas por humanos. Permite entrenar modelos, comparar imágenes y corregir resultados en tiempo real, mostrando patrones y similitudes sin imponer juicios. La decisión final siempre es humana.
+**C.A. Dupin** (Chevalier Auguste Dupin) es un sistema abierto de análisis visual diseñado para encontrar, comparar y aprender patrones visuales a partir de imágenes y video, con el ser humano como guía central del proceso. El sistema combina modelos de visión por computadora con interacción directa del usuario, permitiendo construir conocimiento visual de forma progresiva, transparente y controlada.
 
-Cualquiera que quiera contribuir con codigo es bienvenido
+## 🌟 Características Principales
 
-## Características
+- **Aprendizaje Guiado por Humanos**: El sistema observa, compara y aprende junto al usuario. Las decisiones finales siempre son humanas.
+- **Definición de Patrones Personalizados**: Define tus propios patrones visuales mediante imágenes de ejemplo y regiones de interés (ROI).
+- **Análisis Multi-módulo**: Arquitectura modular que incluye reconocimiento de rostros, cuerpos, animales, plantas, objetos, billetes, estrellas y más.
+- **Razonamiento Visual**: El sistema no solo muestra resultados, sino que expone su proceso interno mediante mapas de calor y visualización de coincidencias.
+- **Entrenamiento Incremental Local**: Entrena y refina modelos localmente sin depender de servicios en la nube, garantizando total privacidad.
+- **Soporte Multi-idioma**: Interfaz disponible en español, inglés y francés.
 
-- **Comparación de imágenes**: Compara dos imágenes y obtén un score de similitud
-- **Búsqueda de coincidencias**: Encuentra imágenes similares en una base de datos
-- **Entrenamiento de modelos**: Entrena modelos personalizados con tus propios datos
-- **Loop de retroalimentación humana**: Modo interactivo para revisar y corregir resultados en tiempo real
-
-## 📚 Documentación
-
-Para una descripción completa del sistema, su arquitectura y filosofía, consulta:
-- **[DESCRIPCION_SISTEMA.md](DESCRIPCION_SISTEMA.md)** - Descripción general del sistema
-- **[FEATURES_IMPLEMENTED.md](FEATURES_IMPLEMENTED.md)** - Características implementadas en detalle
-- **[IMPLEMENTACION.md](IMPLEMENTACION.md)** - Detalles técnicos de implementación
-
-## Instalación
+## 🚀 Instalación
 
 ```bash
-# Clonar el repositorio
-git clone <repository-url>
-cd C.A.Dupin
-
 # Instalar dependencias
 pip install -r requirements.txt
 ```
 
-## Uso
+## 🛠️ Uso del Sistema
 
-### Comparar dos imágenes
+### Análisis Integral (Nuevo)
 
-```bash
-python dupin.py comparar imagen1.jpg imagen2.jpg
-```
-
-Con umbral personalizado:
+Realiza un análisis profundo que combina todos los módulos y patrones aprendidos, mostrando el razonamiento visual:
 
 ```bash
-python dupin.py comparar imagen1.jpg imagen2.jpg --umbral 0.9
+python dupin.py analizar imagen.jpg --umbral 0.6
 ```
 
-### Entrenar un modelo
+### Aprendizaje de Patrones de Usuario
+
+1. **Definir un patrón**:
+   ```bash
+   python dupin.py definir-patron "mi_logo" --descripcion "Logo corporativo" --imagen logo.jpg
+   ```
+
+2. **Entrenar el conocimiento**:
+   ```bash
+   python dupin.py entrenar-patrones --epochs 15
+   ```
+
+3. **Reconocer en nuevas imágenes (o directorios)**:
+   ```bash
+   python dupin.py reconocer-patron ./mis_fotos --umbral 0.7
+   ```
+
+### Retroalimentación Humana
+
+Aprueba o corrige las detecciones del sistema para mejorar su precisión:
 
 ```bash
-python dupin.py entrenar ./directorio_datos --epochs 20 --output mi_modelo.pth
+# Aprobar detección correcta
+python dupin.py aprobar foto.jpg --tipo "mi_logo"
+
+# Corregir detección errónea
+python dupin.py corregir foto.jpg "otro_objeto" --tipo "mi_logo"
 ```
 
-**Nota**: El directorio de entrenamiento debe tener imágenes organizadas en subdirectorios por clase:
-```
-directorio_datos/
-├── clase_a/
-│   ├── imagen1.jpg
-│   └── imagen2.jpg
-└── clase_b/
-    ├── imagen3.jpg
-    └── imagen4.jpg
-```
+### Comparación con Probabilidades Detalladas
 
-### Modo interactivo (Human-in-the-Loop)
+Compara dos imágenes o regiones específicas viendo el razonamiento técnico:
 
 ```bash
-python dupin.py interactivo ./directorio_imagenes
+python dupin.py comparar-prob img1.jpg img2.jpg --metodo sift --razonamiento
 ```
 
-El modo interactivo permite:
-- Comparar imágenes manualmente
-- Buscar imágenes similares
-- Proporcionar feedback sobre las coincidencias
-- Corregir resultados del modelo en tiempo real
-- Exportar feedback para mejorar el modelo
+### Cámara en Vivo
 
-Durante el modo interactivo, el feedback se guarda automáticamente en `feedback.json`.
-
-### Ajustar modelo con feedback humano
-
-Una vez que hayas recopilado feedback humano, puedes usarlo para ajustar el modelo:
+Análisis multimodular en tiempo real:
 
 ```bash
-python dupin.py ajustar --modelo mi_modelo.pth --feedback feedback.json --output modelo_ajustado.pth
+python dupin.py camara
 ```
 
-Esto mejora el modelo basándose en las correcciones que los humanos han proporcionado.
+## 📂 Estructura del Proyecto
 
-## Estructura del proyecto
+- `dupin.py`: Punto de entrada CLI principal.
+- `core/`: Módulos nucleares del sistema.
+  - `image_matcher.py`: Motores de comparación visual.
+  - `pattern_learner.py`: Sistema de aprendizaje de patrones CNN.
+  - `human_feedback.py`: Gestión del loop de retroalimentación.
+  - `roi_manager.py`: Selección y gestión de regiones de interés.
+  - `module_manager.py`: Orquestador de módulos de reconocimiento.
+  - `visual_interface.py`: Generación de visualizaciones y razonamiento.
 
-```
-C.A.Dupin/
-├── dupin.py                    # Programa principal
-├── core/
-│   ├── __init__.py
-│   ├── image_matcher.py        # Comparación de imágenes
-│   ├── model_trainer.py        # Entrenamiento de modelos
-│   └── human_feedback.py       # Loop de retroalimentación humana
-├── requirements.txt            # Dependencias
-└── README.md
-```
+## 📚 Documentación Detallada
 
-## Métodos de comparación
+- [**FEATURES_IMPLEMENTED.md**](FEATURES_IMPLEMENTED.md): Listado completo de capacidades.
+- [**DESCRIPCION_SISTEMA.md**](DESCRIPCION_SISTEMA.md): Filosofía y visión del proyecto.
+- [**IMPLEMENTACION.md**](IMPLEMENTACION.md): Detalles técnicos y arquitectura.
 
-El sistema soporta varios métodos de comparación:
+## ⚖️ Filosofía
 
-- **ORB** (Oriented FAST and Rotated BRIEF): Detección de características rápida
-- **SIFT** (Scale-Invariant Feature Transform): Detección robusta de características
-- **Histogram**: Comparación basada en histogramas de color
-- **SSIM**: Índice de similitud estructural
+C.A. Dupin se basa en la idea de que la inteligencia artificial debe ser una extensión de la capacidad humana, no un reemplazo. El sistema expone su "pensamiento" para que el usuario pueda comprender por qué se tomó una decisión y corregirla si es necesario, fomentando una relación de aprendizaje mutuo.
 
-## Filosofía
-
-C.A.Dupin está diseñado bajo el principio de que **la decisión final siempre es humana**. El sistema:
-
-- Muestra patrones y similitudes
-- No impone juicios automáticos
-- Permite corrección en tiempo real
-- Aprende de la retroalimentación humana
-
-## Contribuir
-
-Las contribuciones son bienvenidas. Por favor:
-
-1. Haz fork del proyecto
-2. Crea una rama para tu feature (`git checkout -b feature/amazing-feature`)
-3. Commit tus cambios (`git commit -m 'Add amazing feature'`)
-4. Push a la rama (`git push origin feature/amazing-feature`)
-5. Abre un Pull Request
-
-## Licencia
-
-Este proyecto es de código abierto y está disponible para todos los que quieran contribuir.
+---
+Desarrollado como software de código abierto para la comunidad.

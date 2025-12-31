@@ -284,6 +284,91 @@ def modo_visual(imagen_path, language_manager=None):
         print("No se encontraron detecciones para mostrar")
 
 
+def modo_analisis(imagen_path, threshold=0.5, language_manager=None):
+    """Realiza un análisis profundo y explicativo de una imagen."""
+    visual_interface = VisualInterface()
+    module_manager = ModuleManager()
+    pattern_learner = PatternLearner()
+    
+    print(f"\n=== C.A. Dupin - Análisis Integral de Imagen ===")
+    print(f"Imagen: {imagen_path}")
+    print(f"Umbral de confianza: {threshold:.0%}")
+    
+    if not visual_interface.load_image(imagen_path):
+        return
+    
+    print(f"\n1. 🧩 Consultando módulos de reconocimiento base...")
+    # Activar todos los módulos
+    for module_info in module_manager.get_available_modules():
+        module_manager.activate_module(module_info['module_id'])
+    
+    module_predictions = module_manager.predict(imagen_path, active_only=True)
+    
+    # Añadir detecciones de módulos
+    for module_id, preds in module_predictions.items():
+        for pred in preds:
+            visual_interface.add_detection(
+                class_name=f"{module_id}:{pred['class']}",
+                confidence=pred['confidence'],
+                bounding_box=pred['bbox']
+            )
+    
+    print(f"\n2. 🧠 Buscando patrones definidos por el usuario...")
+    pattern_detections = pattern_learner.recognize_pattern(
+        image_path=imagen_path,
+        threshold=threshold,
+        include_reasoning=True
+    )
+    
+    # Añadir detecciones de patrones
+    for det in pattern_detections:
+        visual_interface.add_detection(
+            class_name=f"Patrón:{det['pattern_name']}",
+            confidence=det['probability'],
+            bounding_box=det['bbox']
+        )
+    
+    summary = visual_interface.get_detection_summary()
+    print(f"\n📊 Resumen del Análisis:")
+    print(f"  Total detecciones: {summary['total']}")
+    if 'classes' in summary:
+        for cls, count in summary['classes'].items():
+            print(f"  - {cls}: {count}")
+            
+    print(f"\n3. 🎨 Generando representaciones visuales del razonamiento...")
+    
+    # Mostrar detecciones generales
+    print("\nMostrando detecciones encontradas...")
+    visual_interface.show_detections()
+    
+    # Mostrar razonamiento para cada patrón encontrado
+    for det in pattern_detections:
+        if 'heatmap' in det:
+            print(f"\nExponiendo razonamiento interno para: {det['pattern_name']}")
+            print(f"Las áreas más brillantes influyeron más en la identificación.")
+            
+            # Superponer heatmap
+            img = cv2.imread(imagen_path)
+            img = cv2.resize(img, (500, 500))
+            heatmap = cv2.resize(det['heatmap'], (500, 500))
+            heatmap = np.uint8(255 * heatmap)
+            heatmap_color = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+            
+            combined = cv2.addWeighted(img, 0.6, heatmap_color, 0.4, 0)
+            
+            cv2.putText(combined, f"Razonamiento: {det['pattern_name']}", (20, 40), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(combined, "Zonas de influencia del modelo", (20, 70), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            
+            cv2.imshow(f"Razonamiento Interno - {det['pattern_name']}", combined)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
+            
+    print("\n✓ Análisis completo finalizado.")
+    return summary
+
+
 def modo_interactivo(directorio_imagenes, language_manager=None):
     """Inicia el modo interactivo mejorado con retroalimentación humana."""
     
@@ -397,9 +482,38 @@ def entrenar_patrones(epochs=10, language_manager=None):
 
 
 def reconocer_patron(imagen_path, roi=None, threshold=0.5, mostrar_razonamiento=False, language_manager=None):
-    """Reconoce patrones en una imagen con opción de mostrar razonamiento visual."""
+    """Reconoce patrones en una imagen o directorio con opción de mostrar razonamiento visual."""
     pattern_learner = PatternLearner()
+    path = Path(imagen_path)
     
+    if path.is_dir():
+        extensiones = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff'}
+        imagenes = [f for f in path.iterdir() if f.suffix.lower() in extensiones]
+        
+        print(f"\n=== Reconocimiento de Patrones en Directorio ===")
+        print(f"Directorio: {imagen_path}")
+        print(f"Imágenes encontradas: {len(imagenes)}")
+        print(f"Umbral de confianza: {threshold:.0%}")
+        
+        all_detections = {}
+        for img_path in imagenes:
+            print(f"\nAnalizando {img_path.name}...")
+            detections = pattern_learner.recognize_pattern(
+                image_path=str(img_path),
+                roi=roi,
+                threshold=threshold,
+                include_reasoning=False  # No mostramos razonamiento en lote por defecto
+            )
+            if detections:
+                all_detections[str(img_path)] = detections
+                print(f"  ✓ Encontrados {len(detections)} patrones")
+                for det in detections:
+                    print(f"    - {det['pattern_name']} ({det['probability']:.2%})")
+            else:
+                print("  No se encontraron patrones")
+        
+        return all_detections
+
     print(f"\n=== Reconocimiento de Patrones ===")
     print(f"Imagen: {imagen_path}")
     if roi:
@@ -429,16 +543,17 @@ def reconocer_patron(imagen_path, roi=None, threshold=0.5, mostrar_razonamiento=
                     x, y, w, h = roi
                     img = img[y:y+h, x:x+w]
                 
-                img = cv2.resize(img, (400, 400))
-                heatmap = cv2.resize(detection['heatmap'], (400, 400))
-                heatmap = np.uint8(255 * heatmap)
-                heatmap_color = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-                
-                superimposed_img = cv2.addWeighted(img, 0.6, heatmap_color, 0.4, 0)
-                
-                cv2.imshow(f"Razonamiento: {detection['pattern_name']}", superimposed_img)
-                cv2.waitKey(0)
-                cv2.destroyAllWindows()
+                if img is not None:
+                    img = cv2.resize(img, (400, 400))
+                    heatmap = cv2.resize(detection['heatmap'], (400, 400))
+                    heatmap = np.uint8(255 * heatmap)
+                    heatmap_color = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+                    
+                    superimposed_img = cv2.addWeighted(img, 0.6, heatmap_color, 0.4, 0)
+                    
+                    cv2.imshow(f"Razonamiento: {detection['pattern_name']}", superimposed_img)
+                    cv2.waitKey(0)
+                    cv2.destroyAllWindows()
     else:
         print("\nNo se encontraron patrones")
     
@@ -827,6 +942,12 @@ Ejemplos de uso:
     corregir_parser.add_argument('--tipo', default='general',
                                help='Tipo de patrón')
 
+    # Comando: análisis
+    analisis_parser = subparsers.add_parser('analizar', help='Análisis integral (módulos + patrones)')
+    analisis_parser.add_argument('imagen', help='Ruta a la imagen')
+    analisis_parser.add_argument('--umbral', type=float, default=0.5,
+                               help='Umbral de confianza')
+
     args = parser.parse_args()
     
     # Inicializar gestor de idiomas
@@ -893,6 +1014,12 @@ Ejemplos de uso:
             correction=args.correccion,
             roi=tuple(args.roi) if args.roi else None,
             pattern_type=args.tipo,
+            language_manager=language_manager
+        )
+    elif args.comando == 'analizar':
+        modo_analisis(
+            imagen_path=args.imagen,
+            threshold=args.umbral,
             language_manager=language_manager
         )
     else:
