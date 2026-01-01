@@ -42,6 +42,7 @@ from core.visual_interface import VisualInterface
 from core.language_manager import LanguageManager
 from core.module_manager import ModuleManager
 from core.pattern_learner import PatternLearner
+from core.video_pattern_recognition import VideoStreamPatternRecognizer, RealTimePatternAnalyzer
 
 
 def configurar_idioma(language_manager, idioma):
@@ -825,6 +826,126 @@ def entrenar_modulos(directorio_datos, modules=None, language_manager=None):
         print(f"{status} {module_id}: {'Éxito' if success else 'Falló'}")
 
 
+def reconocer_video_patrones(video_path=None, camera_index=None, roi=None, 
+                           threshold=0.5, frame_skip=1, use_tta=False,
+                           save_output=None, language_manager=None):
+    """
+    Reconoce patrones en video (archivo o cámara en vivo).
+    
+    Args:
+        video_path: Ruta al archivo de video (opcional)
+        camera_index: Índice de cámara para video en vivo (opcional)
+        roi: Región de interés (x, y, w, h)
+        threshold: Umbral de confianza mínimo
+        frame_skip: Procesar cada N frames (optimización)
+        use_tta: Usar Test Time Augmentation (lento)
+        save_output: Ruta para guardar video con detecciones
+        language_manager: Gestor de idiomas
+    """
+    print("\n" + "="*60)
+    print("🎥 RECONOCIMIENTO DE PATRONES EN VIDEO")
+    print("="*60)
+    
+    try:
+        # Crear reconocedor de video
+        video_recognizer = VideoStreamPatternRecognizer()
+        
+        # Configurar parámetros de optimización
+        video_recognizer.set_optimization_params(
+            frame_skip=frame_skip,
+            confidence_threshold=threshold
+        )
+        
+        # Procesar video
+        if video_path:
+            print(f"📁 Video archivo: {video_path}")
+            detection_history = video_recognizer.recognize_from_video_file(
+                video_path=video_path,
+                output_path=save_output,
+                roi=roi,
+                threshold=threshold,
+                use_tta=use_tta,
+                display=True,
+                save_detections=True
+            )
+            
+        elif camera_index is not None:
+            print(f"📹 Cámara en vivo: Índice {camera_index}")
+            print("\n⚡ Iniciando reconocimiento en tiempo real...")
+            detection_history = video_recognizer.recognize_from_camera(
+                camera_index=camera_index,
+                roi=roi,
+                threshold=threshold,
+                use_tta=use_tta,
+                save_video=save_output is not None,
+                output_path=save_output
+            )
+        
+        # Mostrar estadísticas finales
+        stats = video_recognizer.get_performance_stats()
+        if stats:
+            print(f"\n📊 ESTADÍSTICAS DE RENDIMIENTO:")
+            print(f"  - Frames procesados: {stats['total_frames']}")
+            print(f"  - FPS promedio: {stats['frames_per_second']:.1f}")
+            print(f"  - Tiempo total: {stats['elapsed_time']:.1f}s")
+            print(f"  - Frames con detecciones: {stats['detection_history_frames']}")
+        
+        if detection_history:
+            print(f"\n✓ Reconocimiento completado: {len(detection_history)} frames con detecciones")
+            print("\n📄 Se ha guardado el historial de detecciones en formato JSON")
+        else:
+            print("\n⚠️ No se detectaron patrones en el video")
+        
+        return detection_history
+        
+    except Exception as e:
+        print(f"\n❌ Error en reconocimiento de video: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def generar_reporte_temporal(detection_file=None, output_path=None):
+    """
+    Genera un reporte temporal de detecciones desde archivo JSON.
+    
+    Args:
+        detection_file: Ruta al archivo de detecciones
+        output_path: Ruta para guardar reporte
+    """
+    if not detection_file or not Path(detection_file).exists():
+        print(f"⚠️ Archivo de detecciones no encontrado: {detection_file}")
+        return
+    
+    # Cargar detecciones
+    try:
+        with open(detection_file, 'r', encoding='utf-8') as f:
+            detection_data = json.load(f)
+    except Exception as e:
+        print(f"❌ Error cargando detecciones: {e}")
+        return
+    
+    print(f"\n📊 Generando reporte temporal...")
+    
+    # Analizar frecuencia
+    frequency = RealTimePatternAnalyzer.analyze_detection_frequency(
+        detection_data.get('detection_history', [])
+    )
+    
+    # Generar reporte
+    if not output_path:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_path = f"reporte_temporal_{timestamp}.json"
+    
+    RealTimePatternAnalyzer.generate_temporal_report(
+        detection_data.get('detection_history', []),
+        output_path
+    )
+    
+    print(f"✓ Reporte guardado: {output_path}")
+    return output_path
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='C.A. Dupin - Herramienta de coincidencias visuales asistidas por humanos',
@@ -1024,6 +1145,43 @@ Ejemplos de uso:
     analisis_parser.add_argument('--umbral', type=float, default=0.5,
                                help='Umbral de confianza')
 
+    # Comando: video-patron (análisis de video)
+    video_patron_parser = subparsers.add_parser('video-patron', 
+                                               help='Reconocer patrones en video')
+    video_patron_parser.add_argument('--video', help='Ruta al archivo de video')
+    video_patron_parser.add_argument('--camara', type=int, default=None,
+                                    help='Índice de cámara para video en vivo')
+    video_patron_parser.add_argument('--roi', nargs=4, type=int,
+                                    metavar=('X', 'Y', 'W', 'H'),
+                                    help='Región de interés (x y w h)')
+    video_patron_parser.add_argument('--umbral', type=float, default=0.5,
+                                    help='Umbral de confianza (0.0-1.0)')
+    video_patron_parser.add_argument('--frame-skip', type=int, default=1,
+                                    help='Procesar cada N frames (optimización, default: 1)')
+    video_patron_parser.add_argument('--tta', action='store_true',
+                                    help='Usar Test Time Augmentation (más preciso pero lento)')
+    video_patron_parser.add_argument('--guardar', help='Ruta para guardar video con detecciones')
+
+    # Comando: camara-patron (reconocimiento en tiempo real desde cámara)
+    camara_patron_parser = subparsers.add_parser('camara-patron',
+                                               help='Reconocer patrones en tiempo real desde cámara')
+    camara_patron_parser.add_argument('--camara', type=int, default=0,
+                                     help='Índice de cámara (default: 0)')
+    camara_patron_parser.add_argument('--roi', nargs=4, type=int,
+                                     metavar=('X', 'Y', 'W', 'H'),
+                                     help='Región de interés (x y w h)')
+    camara_patron_parser.add_argument('--umbral', type=float, default=0.5,
+                                     help='Umbral de confianza (0.0-1.0)')
+    camara_patron_parser.add_argument('--optimizacion', type=int, default=1,
+                                     help='Nivel de optimización: 1=todos, 2=cada 2 frames, 3=cada 3 frames')
+    camara_patron_parser.add_argument('--guardar', help='Ruta para guardar video con detecciones')
+
+    # Comando: reporte-temporal
+    reporte_temporal_parser = subparsers.add_parser('reporte-temporal',
+                                                   help='Generar reporte temporal de detecciones')
+    reporte_temporal_parser.add_argument('detecciones', help='Ruta al archivo JSON de detecciones')
+    reporte_temporal_parser.add_argument('--output', help='Ruta para guardar reporte (auto-generado si no se especifica)')
+
     args = parser.parse_args()
     
     # Inicializar gestor de idiomas
@@ -1109,6 +1267,33 @@ Ejemplos de uso:
             imagen_path=args.imagen,
             threshold=args.umbral,
             language_manager=language_manager
+        )
+    elif args.comando == 'video-patron':
+        reconocer_video_patrones(
+            video_path=args.video,
+            camera_index=args.camara,
+            roi=tuple(args.roi) if args.roi else None,
+            threshold=args.umbral,
+            frame_skip=args.frame_skip,
+            use_tta=args.tta,
+            save_output=args.guardar,
+            language_manager=language_manager
+        )
+    elif args.comando == 'camara-patron':
+        reconocer_video_patrones(
+            video_path=None,
+            camera_index=args.camara,
+            roi=tuple(args.roi) if args.roi else None,
+            threshold=args.umbral,
+            frame_skip=args.optimizacion,
+            use_tta=False,  # No usar TTA en tiempo real (demasiado lento)
+            save_output=args.guardar,
+            language_manager=language_manager
+        )
+    elif args.comando == 'reporte-temporal':
+        generar_reporte_temporal(
+            detection_file=args.detecciones,
+            output_path=args.output
         )
     else:
         parser.print_help()
