@@ -1,82 +1,59 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+# Examples 1:
+# Input:
+# ### Added files:
+# [src/main.py, README.md, config.json]
+# 
+# ### Deleted files:
+# [old/unused.py]
+# ### Modified files:
+# [utils.py]
+# ###current .gitignore Content
+# (empty)
+# Expected Output:
+# (empty — output nothing)
 
-# Virtual environments
-venv/
-env/
-ENV/
-.venv
+# Example 2 (Project with artifacts):
+# Input:
+# ### Added files:
+# [pycache/main.cpython-310.pyc, dist/app.js, .env.local, .vscode/settings.json
+# 
+# ### Deleted files:
+#     []
+# 
+# ### Modified files:
+# []
+# ### current .gitignore Content
+# *.log
+# Expected Output:
+#     #Compiled and build artifacts
+#     *.pyc
+#     pycache/
+#     *.o
+#     *.obj
+#     dist/
+#     build/
+#     #Dependencies
+#     .venv/
+#     venv/
+#     node_modules/
+#     #Logs and temp files
+#     *.log
+#     *.tmp
+#     *.swp
+#     #Environment
+#     .env
+#     .env.local
+#     .env.
+#     #Editors
+#     .vscode/
+#     .idea/
+#     #Original rules preserved
+#     *.log
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.DS_Store
+# Current case:
+# Added files: []
+# Deleted files: []
+# Modified files: ['IA_IMPROVEMENTS.md']
+# current .gitignore Content: (empty)
 
-# Model files
-*.h5
-*.pkl
-*.pth
-*.onnx
-models/
-checkpoints/
-
-# Human feedback data
-feedback.json
-roi_feedback.json
-learning_data.json
-
-# Data
-data/
-images/
-user_patterns/
-rois_seleccionadas.json
-*.jpg
-*.jpeg
-*.png
-*.gif
-*.bmp
-*.tiff
-!examples/*.jpg
-!examples/*.png
-
-# Logs
-*.log
-logs/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# Testing
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-
-# Environment variables
-.env
-.env.local
+# Since only a markdown file was modified and there are no build artifacts, dependencies, or temp files in the changes, output nothing.
