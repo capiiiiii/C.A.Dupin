@@ -6,24 +6,50 @@ import cv2
 import numpy as np
 from pathlib import Path
 from PIL import Image
+import torch
+from typing import Dict, Optional, Tuple, List
 
 
 class ImageMatcher:
     """Compara imágenes y calcula similitudes."""
     
-    def __init__(self, metodo='orb'):
+    def __init__(self, metodo='orb', model_path='modelo.pth'):
         """
         Inicializa el matcher con el método especificado.
         
         Args:
-            metodo: Método de comparación ('orb', 'sift', 'histogram', 'ssim')
+            metodo: Método de comparación ('orb', 'sift', 'histogram', 'ssim', 'siamese')
+            model_path: Ruta al modelo siamés entrenado
         """
         self.metodo = metodo
+        self.model_path = model_path
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = None
         
         if metodo == 'orb':
             self.detector = cv2.ORB_create()
         elif metodo == 'sift':
             self.detector = cv2.SIFT_create()
+        elif metodo == 'siamese':
+            self._load_siamese_model()
+    
+    def _load_siamese_model(self):
+        """Carga el modelo siamés para comparación."""
+        from core.model_trainer import SiameseNetwork
+        try:
+            if Path(self.model_path).exists():
+                self.model = SiameseNetwork().to(self.device)
+                self.model.load_state_dict(torch.load(self.model_path, map_location=self.device))
+                self.model.eval()
+                print(f"✓ Modelo siamés cargado desde {self.model_path}")
+            else:
+                print(f"⚠️ Modelo siamés no encontrado en {self.model_path}. Usando ORB por defecto.")
+                self.metodo = 'orb'
+                self.detector = cv2.ORB_create()
+        except Exception as e:
+            print(f"❌ Error cargando modelo siamés: {e}")
+            self.metodo = 'orb'
+            self.detector = cv2.ORB_create()
     
     def cargar_imagen(self, ruta):
         """Carga una imagen desde la ruta especificada."""
@@ -67,8 +93,41 @@ class ImageMatcher:
             return self._compare_histogram(img1, img2)
         elif self.metodo == 'ssim':
             return self._compare_ssim(img1, img2)
+        elif self.metodo == 'siamese':
+            return self._compare_siamese(img1, img2)
         else:
             return self._compare_features(img1, img2)
+    
+    def _compare_siamese(self, img1, img2):
+        """Compara imágenes usando la red neuronal siamesa."""
+        if self.model is None:
+            return 0.0
+            
+        from torchvision import transforms
+        
+        transform = transforms.Compose([
+            transforms.Resize((100, 100)),
+            transforms.ToTensor(),
+        ])
+        
+        # Convertir a PIL
+        img1_pil = Image.fromarray(cv2.cvtColor(img1, cv2.COLOR_BGR2RGB))
+        img2_pil = Image.fromarray(cv2.cvtColor(img2, cv2.COLOR_BGR2RGB))
+        
+        # Transformar y mover al dispositivo
+        tensor1 = transform(img1_pil).unsqueeze(0).to(self.device)
+        tensor2 = transform(img2_pil).unsqueeze(0).to(self.device)
+        
+        with torch.no_grad():
+            output1, output2 = self.model(tensor1, tensor2)
+            # Calcular distancia euclidiana
+            dist = torch.nn.functional.pairwise_distance(output1, output2).item()
+            
+            # Convertir distancia a similitud (la distancia suele estar entre 0 y 2)
+            # Similitud = 1 / (1 + distancia) o algo similar
+            similarity = max(0.0, 1.0 - (dist / 2.0))
+            
+        return similarity
     
     def compare_with_details(self, imagen1_path, imagen2_path, roi1=None, roi2=None):
         """
@@ -118,6 +177,9 @@ class ImageMatcher:
             results['similarity'] = similarity
         elif self.metodo == 'ssim':
             similarity = self._compare_ssim(img1, img2)
+            results['similarity'] = similarity
+        elif self.metodo == 'siamese':
+            similarity = self._compare_siamese(img1, img2)
             results['similarity'] = similarity
         else:
             similarity, features_details = self._compare_features_with_details(img1, img2)
@@ -317,7 +379,14 @@ class ImageMatcher:
             roi1_img = img1[y1:y1+h1, x1:x1+w1]
             roi2_img = img2[y2:y2+h2, x2:x2+w2]
             
-            similarity = self._compare_features(roi1_img, roi2_img)
+            if self.metodo == 'siamese':
+                similarity = self._compare_siamese(roi1_img, roi2_img)
+            elif self.metodo == 'histogram':
+                similarity = self._compare_histogram(roi1_img, roi2_img)
+            elif self.metodo == 'ssim':
+                similarity = self._compare_ssim(roi1_img, roi2_img)
+            else:
+                similarity = self._compare_features(roi1_img, roi2_img)
             probability = self._calculate_probability(similarity)
             
             results.append({

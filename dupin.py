@@ -29,8 +29,11 @@ Mejoras de IA implementadas (SIN APIs externas):
 
 import sys
 import argparse
+import json
+from datetime import datetime
 from pathlib import Path
 import cv2
+import numpy as np
 
 # Importar módulos principales
 from core.image_matcher import ImageMatcher
@@ -52,9 +55,10 @@ def configurar_idioma(language_manager, idioma):
     return False
 
 
-def comparar_imagenes(imagen1_path, imagen2_path, umbral=0.85, language_manager=None):
+def comparar_imagenes(imagen1_path, imagen2_path, umbral=0.85, metodo='orb', 
+                      modelo_path='modelo.pth', language_manager=None):
     """Compara dos imágenes y muestra la similitud."""
-    matcher = ImageMatcher()
+    matcher = ImageMatcher(metodo=metodo, model_path=modelo_path)
     
     # Obtener textos traducidos
     texts = {}
@@ -636,9 +640,10 @@ def listar_patrones(language_manager=None):
 
 
 def comparar_con_probabilidades(imagen1_path, imagen2_path, roi1=None, roi2=None, 
-                               metodo='orb', mostrar_razonamiento=False, language_manager=None):
+                               metodo='orb', modelo_path='modelo.pth', 
+                               mostrar_razonamiento=False, language_manager=None):
     """Compara dos imágenes mostrando probabilidades detalladas y razonamiento visual."""
-    matcher = ImageMatcher(metodo=metodo)
+    matcher = ImageMatcher(metodo=metodo, model_path=modelo_path)
     visual_interface = VisualInterface()
     
     print(f"\n=== Comparación con Probabilidades Detalladas ===")
@@ -1007,6 +1012,11 @@ Ejemplos de uso:
     comparar_parser.add_argument('imagen2', help='Ruta a la segunda imagen')
     comparar_parser.add_argument('--umbral', type=float, default=0.85,
                                 help='Umbral de similitud (0.0-1.0)')
+    comparar_parser.add_argument('--metodo', default='orb',
+                                choices=['orb', 'sift', 'histogram', 'ssim', 'siamese'],
+                                help='Método de comparación')
+    comparar_parser.add_argument('--modelo', default='modelo.pth',
+                                help='Ruta al modelo siamés (si se usa metodo=siamese)')
     
     # Comando: entrenar
     entrenar_parser = subparsers.add_parser('entrenar', help='Entrenar modelo')
@@ -1113,8 +1123,10 @@ Ejemplos de uso:
                                     metavar=('X', 'Y', 'W', 'H'),
                                     help='ROI de imagen 2 (x y w h)')
     comparar_prob_parser.add_argument('--metodo', default='orb',
-                                    choices=['orb', 'sift', 'histogram', 'ssim'],
+                                    choices=['orb', 'sift', 'histogram', 'ssim', 'siamese'],
                                     help='Método de comparación')
+    comparar_prob_parser.add_argument('--modelo', default='modelo.pth',
+                                    help='Ruta al modelo siamés (si se usa metodo=siamese)')
     comparar_prob_parser.add_argument('--razonamiento', action='store_true',
                                     help='Mostrar razonamiento visual de la coincidencia')
 
@@ -1188,7 +1200,7 @@ Ejemplos de uso:
     language_manager = LanguageManager(args.idioma)
     
     if args.comando == 'comparar':
-        comparar_imagenes(args.imagen1, args.imagen2, args.umbral, language_manager)
+        comparar_imagenes(args.imagen1, args.imagen2, args.umbral, args.metodo, args.modelo, language_manager)
     elif args.comando == 'entrenar':
         entrenar_modelo(args.directorio, args.epochs, args.output, language_manager)
     elif args.comando == 'ajustar':
@@ -1244,6 +1256,7 @@ Ejemplos de uso:
             roi1=tuple(args.roi1) if args.roi1 else None,
             roi2=tuple(args.roi2) if args.roi2 else None,
             metodo=args.metodo,
+            modelo_path=args.modelo,
             mostrar_razonamiento=args.razonamiento,
             language_manager=language_manager
         )
