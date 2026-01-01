@@ -90,20 +90,16 @@ class VideoStreamPatternRecognizer:
         else:
             detection_roi = (0, 0, frame.shape[1], frame.shape[0])
         
-        # Guardar frame temporalmente para el reconocedor
-        temp_frame_path = Path("temp_frame.jpg")
-        cv2.imwrite(str(temp_frame_path), frame)
-        
         try:
             # Realizar detección
-            if use_tta and hasattr(self.pattern_learner, 'recognize_pattern_tta'):
+            if use_tta:
                 detections = self.pattern_learner.recognize_pattern_tta(
-                    str(temp_frame_path), roi=detection_roi, 
+                    frame, roi=detection_roi, 
                     threshold=threshold, include_reasoning=False
                 )
             else:
                 detections = self.pattern_learner.recognize_pattern(
-                    str(temp_frame_path), roi=detection_roi,
+                    frame, roi=detection_roi,
                     threshold=threshold, include_reasoning=False
                 )
             
@@ -117,10 +113,9 @@ class VideoStreamPatternRecognizer:
                 
             return detections
             
-        finally:
-            # Limpiar archivo temporal
-            if temp_frame_path.exists():
-                temp_frame_path.unlink()
+        except Exception as e:
+            print(f"Error procesando frame: {e}")
+            return []
     
     def _update_detections_tracking(self, detections: List[Dict], frame_num: int):
         """

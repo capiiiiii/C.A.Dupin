@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 import json
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union
 from datetime import datetime
 from PIL import Image
 import torch
@@ -671,14 +671,37 @@ class ImprovedPatternLearner:
         
         return history
     
-    def recognize_pattern_tta(self, image_path: str, roi: Tuple[int, int, int, int] = None,
+    def _load_model_checkpoint(self) -> bool:
+        """Carga los pesos del modelo desde el archivo, ajustando la arquitectura si es necesario."""
+        if not Path(self.model_path).exists():
+            return False
+            
+        try:
+            checkpoint = torch.load(self.model_path, map_location=self.device)
+            num_classes = checkpoint.get('num_classes', len(self.patterns))
+            
+            # Re-inicializar modelo si el número de clases no coincide
+            if self.model is None or num_classes != self.model.fc[-1].out_features:
+                config = checkpoint.get('config', {})
+                dropout_rate = config.get('dropout_rate', 0.4)
+                self.model = ImprovedPatternNetwork(num_classes=num_classes, dropout_rate=dropout_rate)
+                self.model.to(self.device)
+                
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.model.eval()
+            return True
+        except Exception as e:
+            print(f"Error cargando el modelo: {e}")
+            return False
+
+    def recognize_pattern_tta(self, image_input: Union[str, np.ndarray], roi: Tuple[int, int, int, int] = None,
                             threshold: float = 0.5, include_reasoning: bool = False,
                             tta_transforms: int = 5) -> List[Dict]:
         """
         Reconoce patrones usando Test Time Augmentation (TTA) para mejor precisión.
         
         Args:
-            image_path: Ruta a la imagen
+            image_input: Ruta a la imagen o array de imagen (BGR)
             roi: Región de interés (x, y, w, h)
             threshold: Umbral de confianza mínimo
             include_reasoning: Si se debe incluir información de razonamiento
@@ -688,23 +711,22 @@ class ImprovedPatternLearner:
             Lista de detecciones encontradas
         """
         if not self.patterns:
-            print("No hay patrones entrenados")
+            print("No hay patrones definidos")
             return []
         
         # Cargar modelo
-        try:
-            checkpoint = torch.load(self.model_path, map_location=self.device)
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.model.eval()
-        except Exception as e:
-            print(f"Error cargando el modelo: {e}")
+        if not self._load_model_checkpoint():
+            print("No se pudo cargar el modelo entrenado")
             return []
         
         # Cargar imagen
-        full_image = cv2.imread(str(image_path))
-        if full_image is None:
-            print(f"No se pudo cargar imagen: {image_path}")
-            return []
+        if isinstance(image_input, (str, Path)):
+            full_image = cv2.imread(str(image_input))
+            if full_image is None:
+                print(f"No se pudo cargar imagen: {image_input}")
+                return []
+        else:
+            full_image = image_input
         
         image = full_image
         # Extraer ROI si existe
@@ -786,14 +808,14 @@ class ImprovedPatternLearner:
         
         return detections
     
-    def recognize_pattern(self, image_path: str, roi: Tuple[int, int, int, int] = None,
+    def recognize_pattern(self, image_input: Union[str, np.ndarray], roi: Tuple[int, int, int, int] = None,
                         threshold: float = 0.5, include_reasoning: bool = False,
                         use_tta: bool = False) -> List[Dict]:
         """
         Reconoce patrones en una imagen.
         
         Args:
-            image_path: Ruta a la imagen
+            image_input: Ruta a la imagen o array de imagen (BGR)
             roi: Región de interés (x, y, w, h)
             threshold: Umbral de confianza mínimo
             include_reasoning: Si se debe incluir información de razonamiento
@@ -803,26 +825,25 @@ class ImprovedPatternLearner:
             Lista de detecciones encontradas
         """
         if use_tta:
-            return self.recognize_pattern_tta(image_path, roi, threshold, include_reasoning)
+            return self.recognize_pattern_tta(image_input, roi, threshold, include_reasoning)
         
         if not self.patterns:
-            print("No hay patrones entrenados")
+            print("No hay patrones definidos")
             return []
         
         # Cargar modelo
-        try:
-            checkpoint = torch.load(self.model_path, map_location=self.device)
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.model.eval()
-        except Exception as e:
-            print(f"Error cargando el modelo: {e}")
+        if not self._load_model_checkpoint():
+            print("No se pudo cargar el modelo entrenado")
             return []
         
         # Cargar imagen
-        full_image = cv2.imread(str(image_path))
-        if full_image is None:
-            print(f"No se pudo cargar imagen: {image_path}")
-            return []
+        if isinstance(image_input, (str, Path)):
+            full_image = cv2.imread(str(image_input))
+            if full_image is None:
+                print(f"No se pudo cargar imagen: {image_input}")
+                return []
+        else:
+            full_image = image_input
         
         image = full_image
         # Extraer ROI si existe
@@ -917,12 +938,8 @@ class ImprovedPatternLearner:
             return {}
         
         # Cargar modelo
-        try:
-            checkpoint = torch.load(self.model_path, map_location=self.device)
-            self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.model.eval()
-        except Exception as e:
-            print(f"Error cargando el modelo: {e}")
+        if not self._load_model_checkpoint():
+            print("No se pudo cargar el modelo entrenado")
             return {}
         
         # Preparar dataset de prueba
