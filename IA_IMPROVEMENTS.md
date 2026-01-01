@@ -356,18 +356,14 @@ F1 = 2 * (Precision * Recall) / (Precision + Recall)
 
 ### Matriz de Confusión
 
-```
-          Predicción
-     ┌───┬───┬───┬───┐
-     │   │ A │ B │ C │
-R ├───┼───┼───┼───┤
-e A │ 9 │ 1 │ 0 │  → El patrón A se confunde 1 vez con B
-a ├───┼───┼───┼───┤
-l B │ 2 │ 7 │ 1 │
-  ├───┼───┼───┼───┤
-C │ 0 │ 1 │ 8 │
-  └───┴───┴───┴───┘
-```
+|          | Predicción |      |      |
+|----------|------------|------|------|
+| Real     | A          | B    | C    |
+| **A**    | 9          | 1    | 0    |  → El patrón A se confunde 1 vez con B
+| **B**    | 2          | 7    | 1    |
+| **C**    | 0          | 1    | 8    |
+
+**Lectura de la matriz:** Las filas representan las etiquetas reales y las columnas las predicciones del modelo. Por ejemplo, de 10 casos reales de la clase A, 9 se predijeron correctamente como A, y 1 se predijo erróneamente como B.
 
 ## 🚀 Cómo Usar las Mejoras
 
