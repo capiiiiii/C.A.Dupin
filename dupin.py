@@ -45,6 +45,7 @@ from core.visual_interface import VisualInterface
 from core.language_manager import LanguageManager
 from core.module_manager import ModuleManager
 from core.pattern_learner import PatternLearner
+from core.pattern_learner_v2 import ImprovedPatternLearnerV2
 from core.video_pattern_recognition import VideoStreamPatternRecognizer, RealTimePatternAnalyzer
 
 
@@ -951,6 +952,348 @@ def generar_reporte_temporal(detection_file=None, output_path=None):
     return output_path
 
 
+# ═══════════════════════════════════════════════════════════════
+# FUNCIONES V2 - Sistema mejorado de reconocimiento de patrones
+# ═══════════════════════════════════════════════════════════════
+
+def crear_patron_v2(nombre, descripcion="", language_manager=None):
+    """
+    Crea un nuevo patrón con sistema V2.
+    Crea automáticamente la carpeta en fotos_entrenamiento/por_patron/.
+    """
+    pattern_learner = ImprovedPatternLearnerV2()
+    
+    print(f"\n=== C.A. Dupin V2 - Crear Patrón ===")
+    print(f"🎯 Creando patrón: {nombre}")
+    if descripcion:
+        print(f"📝 Descripción: {descripcion}")
+    
+    pattern_id = pattern_learner.define_pattern_from_folder(
+        name=nombre,
+        description=descripcion
+    )
+    
+    pattern_folder = pattern_learner.patterns_training_dir / nombre
+    print(f"\n📁 Siguientes pasos:")
+    print(f"   1. Coloca fotos de '{nombre}' en:")
+    print(f"      {pattern_folder}")
+    print(f"   2. Ejecuta: python dupin.py importar-entrenamiento")
+    print(f"   3. Entrena: python dupin.py entrenar-patrones-v2")
+    
+    return pattern_id
+
+
+def importar_entrenamiento(language_manager=None):
+    """
+    Importa todas las imágenes de las carpetas de entrenamiento.
+    """
+    pattern_learner = ImprovedPatternLearnerV2()
+    
+    print(f"\n=== C.A. Dupin V2 - Importar Entrenamiento ===")
+    print(f"📂 Buscando imágenes en fotos_entrenamiento/por_patron/...")
+    
+    results = pattern_learner.import_all_patterns_from_folders()
+    
+    if not results:
+        print(f"\n⚠️  No se encontraron imágenes.")
+        print(f"   Crea patrones con: python dupin.py crear-patron-v2 <nombre>")
+        print(f"   Y coloca fotos en las carpetas creadas.")
+        return {}
+    
+    total_images = sum(results.values())
+    print(f"\n✅ Importación completada")
+    print(f"   Total de imágenes importadas: {total_images}")
+    
+    return results
+
+
+def entrenar_patrones_v2(epochs=30, batch_size=16, val_split=0.2, 
+                        learning_rate=0.001, max_lr=0.01,
+                        use_focal_loss=False, label_smoothing=0.0, 
+                        early_stopping_patience=10, warmup_epochs=3,
+                        dropout_rate=0.4, use_mixup=True, 
+                        use_randaugment=True, gradient_accumulation=1,
+                        language_manager=None):
+    """
+    Entrena el modelo V2 con todas las técnicas avanzadas.
+    """
+    pattern_learner = ImprovedPatternLearnerV2()
+    
+    print(f"\n=== C.A. Dupin V2 - Entrenamiento Mejorado ===")
+    
+    patterns = pattern_learner.list_patterns()
+    if not patterns:
+        print("❌ No hay patrones definidos.")
+        print("   Crea patrones con: python dupin.py crear-patron-v2 <nombre>")
+        return None
+    
+    print(f"📊 Patrones encontrados: {len(patterns)}")
+    for p in patterns:
+        print(f"   • {p['name']}: {p['samples']} muestras (carpeta: {p['folder_images']} imágenes)")
+    
+    print(f"\n🔧 Configuración avanzada:")
+    print(f"   Épocas: {epochs}")
+    print(f"   Batch size: {batch_size}")
+    print(f"   Learning rate: {learning_rate} (max: {max_lr})")
+    print(f"   Validación: {val_split*100:.0f}%")
+    print(f"   One-Cycle LR: ✓")
+    print(f"   RandAugment: {'✓' if use_randaugment else '✗'}")
+    print(f"   Mixup: {'✓' if use_mixup else '✗'}")
+    print(f"   Gradient Accumulation: {gradient_accumulation}x")
+    print(f"   Warmup: {warmup_epochs} épocas")
+    print(f"   Focal Loss: {'✓' if use_focal_loss else '✗'}")
+    print(f"   Label Smoothing: {label_smoothing}")
+    print(f"   Early Stopping: {early_stopping_patience} épocas")
+    print(f"   Dropout: {dropout_rate}")
+    
+    history = pattern_learner.train_patterns_v2(
+        epochs=epochs,
+        batch_size=batch_size,
+        val_split=val_split,
+        learning_rate=learning_rate,
+        max_lr=max_lr,
+        use_focal_loss=use_focal_loss,
+        label_smoothing=label_smoothing,
+        early_stopping_patience=early_stopping_patience,
+        warmup_epochs=warmup_epochs,
+        dropout_rate=dropout_rate,
+        use_mixup=use_mixup,
+        use_randaugment=use_randaugment,
+        gradient_accumulation_steps=gradient_accumulation,
+        save_checkpoints=True
+    )
+    
+    if history:
+        print(f"\n✅ Entrenamiento completado exitosamente")
+        print(f"💾 Modelo guardado en: user_patterns/patterns_model_v2.pth")
+        return pattern_learner
+    else:
+        print(f"\n❌ Error en el entrenamiento")
+        return None
+
+
+def identificar_carpetas_v2(threshold=0.5, output_file=None, language_manager=None):
+    """
+    Identifica patrones en todas las imágenes de fotos_identificar/.
+    """
+    pattern_learner = ImprovedPatternLearnerV2()
+    
+    print(f"\n=== C.A. Dupin V2 - Identificar desde Carpeta ===")
+    print(f"📁 Buscando imágenes en fotos_identificar/...")
+    
+    # Verificar que el modelo existe
+    model_info = pattern_learner.get_model_info()
+    if not model_info['model_exists']:
+        print(f"\n❌ No hay modelo entrenado.")
+        print(f"   Primero entrena con: python dupin.py entrenar-patrones-v2")
+        return {}
+    
+    print(f"📊 Modelo: {model_info['model_size_mb']:.2f} MB")
+    print(f"🎯 Patrones entrenados: {model_info['num_patterns']}")
+    print(f"   {', '.join(model_info['pattern_names'])}")
+    
+    results = pattern_learner.identify_from_folder(output_file=output_file)
+    
+    return results
+
+
+def listar_patrones_v2(language_manager=None):
+    """
+    Lista todos los patrones con información detallada V2.
+    """
+    pattern_learner = ImprovedPatternLearnerV2()
+    
+    patterns = pattern_learner.list_patterns()
+    model_info = pattern_learner.get_model_info()
+    
+    print(f"\n=== C.A. Dupin V2 - Patrones Definidos ===")
+    print(f"📊 Total de patrones: {len(patterns)}")
+    
+    if model_info['model_exists']:
+        print(f"🤖 Modelo entrenado: ✓ ({model_info['model_size_mb']:.2f} MB)")
+        print(f"📅 Última modificación: {model_info['model_modified']}")
+        print(f"📚 Entrenamientos previos: {model_info['training_history_count']}")
+    else:
+        print(f"🤖 Modelo entrenado: ✗ (entrena con: python dupin.py entrenar-patrones-v2)")
+    
+    if patterns:
+        print(f"\n📋 Lista de patrones:\n")
+        for p in patterns:
+            print(f"  🎯 {p['name']}")
+            print(f"     ID: {p['id']}")
+            if p['description']:
+                print(f"     Descripción: {p['description']}")
+            print(f"     Muestras importadas: {p['samples']}")
+            print(f"     Imágenes en carpeta: {p['folder_images']}")
+            if p['approved'] + p['corrected'] > 0:
+                print(f"     Feedback: {p['approved']}✓ / {p['corrected']}✗")
+                print(f"     Precisión: {p['accuracy']:.2%}")
+            print(f"     Creado: {p['created_at'][:10]}")
+            print()
+    else:
+        print(f"\n⚠️  No hay patrones definidos.")
+        print(f"   Crea un patrón con: python dupin.py crear-patron-v2 <nombre>")
+    
+    return patterns
+
+
+def info_modelo_v2(language_manager=None):
+    """
+    Muestra información detallada sobre el modelo V2.
+    """
+    pattern_learner = ImprovedPatternLearnerV2()
+    
+    print(f"\n=== C.A. Dupin V2 - Información del Modelo ===")
+    
+    patterns = pattern_learner.list_patterns()
+    model_info = pattern_learner.get_model_info()
+    
+    print(f"\n📁 Directorios:")
+    print(f"   fotos_entrenamiento/       : Para fotos de entrenamiento")
+    print(f"   fotos_entrenamiento/por_patron/ : Organizado por patrón")
+    print(f"   fotos_identificar/        : Para fotos a identificar")
+    print(f"   user_patterns/             : Datos y modelo del sistema")
+    
+    print(f"\n🤖 Estado del modelo:")
+    if model_info['model_exists']:
+        print(f"   ✅ Modelo entrenado disponible")
+        print(f"   📏 Tamaño: {model_info['model_size_mb']:.2f} MB")
+        print(f"   📅 Modificado: {model_info['model_modified']}")
+        print(f"   📍 Ruta: {model_info['model_path']}")
+    else:
+        print(f"   ❌ No hay modelo entrenado")
+        print(f"   💡 Entrena con: python dupin.py entrenar-patrones-v2")
+    
+    print(f"\n🎯 Patrones definidos: {len(patterns)}")
+    if patterns:
+        for p in patterns:
+            folder_status = "✓" if p['folder_images'] > 0 else "○"
+            print(f"   {folder_status} {p['name']}: {p['samples']} muestras, "
+                  f"{p['folder_images']} imágenes en carpeta")
+    
+    if not patterns:
+        print(f"   💡 Crea un patrón con: python dupin.py crear-patron-v2 <nombre>")
+    
+    print(f"\n📚 Historial de entrenamientos: {model_info['training_history_count']}")
+    
+    return model_info
+
+
+def reconocer_patron_v2(imagen_path, threshold=0.5, multiscale=False, 
+                       language_manager=None):
+    """
+    Reconoce patrones en una imagen usando el sistema V2.
+    """
+    pattern_learner = ImprovedPatternLearnerV2()
+    
+    print(f"\n=== C.A. Dupin V2 - Reconocimiento ===")
+    print(f"📷 Imagen: {imagen_path}")
+    print(f"🎯 Umbral: {threshold:.0%}")
+    
+    # Verificar modelo
+    model_info = pattern_learner.get_model_info()
+    if not model_info['model_exists']:
+        print(f"\n❌ No hay modelo entrenado.")
+        print(f"   Entrena con: python dupin.py entrenar-patrones-v2")
+        return []
+    
+    if multiscale:
+        print(f"🔍 Multi-scale inference: Activo")
+        detections = pattern_learner.recognize_pattern_multiscale(
+            image_path=imagen_path,
+            scales=[96, 128, 160],
+            threshold=threshold
+        )
+    else:
+        detections = pattern_learner.recognize_pattern(
+            image_path=imagen_path,
+            threshold=threshold
+        )
+    
+    if detections:
+        print(f"\n✅ Patrones encontrados: {len(detections)}")
+        for i, det in enumerate(detections, 1):
+            print(f"\n  {i}. {det['pattern_name']}")
+            print(f"     Probabilidad: {det['probability']:.2%}")
+            print(f"     Confianza: ", end="")
+            conf = det['probability']
+            if conf >= 0.9:
+                print("🔥 Muy alta")
+            elif conf >= 0.75:
+                print("✨ Alta")
+            elif conf >= 0.6:
+                print("👍 Media")
+            else:
+                print("⚠️ Baja")
+    else:
+        print(f"\n❌ No se encontraron patrones con el umbral actual.")
+        print(f"   Intenta un umbral más bajo: --umbral 0.3")
+    
+    return detections
+
+
+def flujo_completo_v2(nombre_patron, descripcion="", epochs=30, 
+                      language_manager=None):
+    """
+    Flujo completo V2: crear patrón, importar imágenes y entrenar.
+    """
+    print(f"\n{'='*60}")
+    print(f"  C.A. DUPIN V2 - FLUJO COMPLETO DE ENTRENAMIENTO")
+    print(f"{'='*60}")
+    
+    # Paso 1: Crear patrón
+    print(f"\n📌 PASO 1: Crear patrón")
+    pattern_learner = ImprovedPatternLearnerV2()
+    pattern_id = pattern_learner.define_pattern_from_folder(nombre_patron, descripcion)
+    
+    pattern_folder = pattern_learner.patterns_training_dir / nombre_patron
+    
+    print(f"\n💡 Ahora tienes 3 opciones:")
+    print(f"\n   OPCIÓN A - Flujo interactivo:")
+    print(f"   1. Coloca tus fotos en: {pattern_folder}")
+    print(f"   2. Presiona ENTER cuando estés listo")
+    
+    input(f"\n   [ENTER para continuar] ")
+    
+    # Paso 2: Importar imágenes
+    print(f"\n📌 PASO 2: Importar imágenes de entrenamiento")
+    results = pattern_learner.import_all_patterns_from_folders()
+    
+    if nombre_patron not in results:
+        print(f"\n⚠️  No se encontraron imágenes para '{nombre_patron}'")
+        print(f"   Coloca imágenes en: {pattern_folder}")
+        print(f"   Y ejecuta: python dupin.py importar-entrenamiento")
+        return pattern_learner
+    
+    print(f"\n✓ Importadas {results[nombre_patron]} imágenes")
+    
+    # Paso 3: Entrenar
+    print(f"\n📌 PASO 3: Entrenar modelo")
+    history = pattern_learner.train_patterns_v2(
+        epochs=epochs,
+        batch_size=16,
+        val_split=0.2,
+        use_randaugment=True,
+        use_mixup=True
+    )
+    
+    if history:
+        print(f"\n{'='*60}")
+        print(f"  ✅ ¡ENTRENAMIENTO COMPLETADO EXITOSAMENTE!")
+        print(f"{'='*60}")
+        print(f"\n📊 Resultados finales:")
+        print(f"   - Mejor val_loss: {min(history['val_loss']):.4f}")
+        print(f"   - Mejor val_acc: {max(history['val_acc']):.4f}")
+        print(f"   - Épocas entrenadas: {len(history['train_loss'])}")
+        
+        print(f"\n🎯 Próximos pasos:")
+        print(f"   1. Identificar: python dupin.py identificar-v2")
+        print(f"   2. Reconocer una imagen: python dupin.py reconocer-v2 <imagen>")
+        print(f"   3. Ver info: python dupin.py info-v2")
+    
+    return pattern_learner
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='C.A. Dupin - Herramienta de coincidencias visuales asistidas por humanos',
@@ -1194,6 +1537,82 @@ Ejemplos de uso:
     reporte_temporal_parser.add_argument('detecciones', help='Ruta al archivo JSON de detecciones')
     reporte_temporal_parser.add_argument('--output', help='Ruta para guardar reporte (auto-generado si no se especifica)')
 
+    # ═══════════════════════════════════════════════════════════════
+    # COMANDOS V2 - Sistema mejorado de reconocimiento de patrones
+    # ═══════════════════════════════════════════════════════════════
+    
+    # Comando: crear-patron-v2
+    crear_patron_v2_parser = subparsers.add_parser('crear-patron-v2',
+                                                  help='V2: Crear un nuevo patrón (crea carpeta automáticamente)')
+    crear_patron_v2_parser.add_argument('nombre', help='Nombre del patrón')
+    crear_patron_v2_parser.add_argument('--descripcion', default='', help='Descripción del patrón')
+    
+    # Comando: importar-entrenamiento
+    importar_entrenamiento_parser = subparsers.add_parser('importar-entrenamiento',
+                                                         help='V2: Importar imágenes de las carpetas de entrenamiento')
+    
+    # Comando: entrenar-patrones-v2
+    entrenar_patrones_v2_parser = subparsers.add_parser('entrenar-patrones-v2',
+                                                       help='V2: Entrenar modelo con técnicas de IA avanzadas')
+    entrenar_patrones_v2_parser.add_argument('--epochs', type=int, default=30,
+                                          help='Número de épocas (default: 30)')
+    entrenar_patrones_v2_parser.add_argument('--batch-size', type=int, default=16,
+                                          help='Tamaño del batch (default: 16)')
+    entrenar_patrones_v2_parser.add_argument('--val-split', type=float, default=0.2,
+                                          help='Proporción de validación (default: 0.2)')
+    entrenar_patrones_v2_parser.add_argument('--learning-rate', type=float, default=0.001,
+                                          help='Learning rate inicial (default: 0.001)')
+    entrenar_patrones_v2_parser.add_argument('--max-lr', type=float, default=0.01,
+                                          help='Learning rate máximo para One-Cycle (default: 0.01)')
+    entrenar_patrones_v2_parser.add_argument('--focal-loss', action='store_true',
+                                          help='Usar Focal Loss para clases desbalanceadas')
+    entrenar_patrones_v2_parser.add_argument('--label-smoothing', type=float, default=0.0,
+                                          help='Factor de label smoothing (default: 0.0)')
+    entrenar_patrones_v2_parser.add_argument('--early-stopping', type=int, default=10,
+                                          help='Paciencia para early stopping (default: 10)')
+    entrenar_patrones_v2_parser.add_argument('--warmup', type=int, default=3,
+                                          help='Épocas de warmup (default: 3)')
+    entrenar_patrones_v2_parser.add_argument('--dropout', type=float, default=0.4,
+                                          help='Tasa de dropout (default: 0.4)')
+    entrenar_patrones_v2_parser.add_argument('--no-mixup', action='store_true',
+                                          help='Desactivar Mixup augmentation')
+    entrenar_patrones_v2_parser.add_argument('--no-randaugment', action='store_true',
+                                          help='Desactivar RandAugment')
+    entrenar_patrones_v2_parser.add_argument('--grad-accum', type=int, default=1,
+                                          help='Gradient accumulation steps (default: 1)')
+    
+    # Comando: reconocer-v2
+    reconocer_v2_parser = subparsers.add_parser('reconocer-v2',
+                                              help='V2: Reconocer patrones en una imagen')
+    reconocer_v2_parser.add_argument('imagen', help='Ruta a la imagen')
+    reconocer_v2_parser.add_argument('--umbral', type=float, default=0.5,
+                                    help='Umbral de confianza (0.0-1.0)')
+    reconocer_v2_parser.add_argument('--multiscale', action='store_true',
+                                    help='Usar multi-scale inference para mayor precisión')
+    
+    # Comando: identificar-v2
+    identificar_v2_parser = subparsers.add_parser('identificar-v2',
+                                                help='V2: Identificar patrones en todas las imágenes de fotos_identificar/')
+    identificar_v2_parser.add_argument('--umbral', type=float, default=0.5,
+                                     help='Umbral de confianza (0.0-1.0)')
+    identificar_v2_parser.add_argument('--output', help='Ruta del archivo JSON de salida')
+    
+    # Comando: listar-patrones-v2
+    listar_patrones_v2_parser = subparsers.add_parser('listar-patrones-v2',
+                                                   help='V2: Listar patrones con información detallada')
+    
+    # Comando: info-v2
+    info_v2_parser = subparsers.add_parser('info-v2',
+                                          help='V2: Mostrar información del sistema y modelo')
+    
+    # Comando: flujo-completo-v2
+    flujo_completo_v2_parser = subparsers.add_parser('flujo-completo-v2',
+                                                   help='V2: Flujo completo: crear patrón, importar y entrenar')
+    flujo_completo_v2_parser.add_argument('nombre', help='Nombre del patrón')
+    flujo_completo_v2_parser.add_argument('--descripcion', default='', help='Descripción del patrón')
+    flujo_completo_v2_parser.add_argument('--epochs', type=int, default=30,
+                                          help='Número de épocas (default: 30)')
+
     args = parser.parse_args()
     
     # Inicializar gestor de idiomas
@@ -1307,6 +1726,58 @@ Ejemplos de uso:
         generar_reporte_temporal(
             detection_file=args.detecciones,
             output_path=args.output
+        )
+    # ═══════════════════════════════════════════════════════════════
+    # COMANDOS V2 - Sistema mejorado de reconocimiento de patrones
+    # ═══════════════════════════════════════════════════════════════
+    elif args.comando == 'crear-patron-v2':
+        crear_patron_v2(
+            nombre=args.nombre,
+            descripcion=args.descripcion,
+            language_manager=language_manager
+        )
+    elif args.comando == 'importar-entrenamiento':
+        importar_entrenamiento(language_manager=language_manager)
+    elif args.comando == 'entrenar-patrones-v2':
+        entrenar_patrones_v2(
+            epochs=args.epochs,
+            batch_size=args.batch_size,
+            val_split=args.val_split,
+            learning_rate=args.learning_rate,
+            max_lr=args.max_lr,
+            use_focal_loss=args.focal_loss,
+            label_smoothing=args.label_smoothing,
+            early_stopping_patience=args.early_stopping,
+            warmup_epochs=args.warmup,
+            dropout_rate=args.dropout,
+            use_mixup=not args.no_mixup,
+            use_randaugment=not args.no_randaugment,
+            gradient_accumulation=args.grad_accum,
+            language_manager=language_manager
+        )
+    elif args.comando == 'reconocer-v2':
+        reconocer_patron_v2(
+            imagen_path=args.imagen,
+            threshold=args.umbral,
+            multiscale=args.multiscale,
+            language_manager=language_manager
+        )
+    elif args.comando == 'identificar-v2':
+        identificar_carpetas_v2(
+            threshold=args.umbral,
+            output_file=args.output,
+            language_manager=language_manager
+        )
+    elif args.comando == 'listar-patrones-v2':
+        listar_patrones_v2(language_manager=language_manager)
+    elif args.comando == 'info-v2':
+        info_modelo_v2(language_manager=language_manager)
+    elif args.comando == 'flujo-completo-v2':
+        flujo_completo_v2(
+            nombre_patron=args.nombre,
+            descripcion=args.descripcion,
+            epochs=args.epochs,
+            language_manager=language_manager
         )
     else:
         parser.print_help()

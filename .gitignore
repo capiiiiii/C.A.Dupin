@@ -1,59 +1,74 @@
-# Examples 1:
-# Input:
-# ### Added files:
-# [src/main.py, README.md, config.json]
-# 
-# ### Deleted files:
-# [old/unused.py]
-# ### Modified files:
-# [utils.py]
-# ###current .gitignore Content
-# (empty)
-# Expected Output:
-# (empty — output nothing)
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# Example 2 (Project with artifacts):
-# Input:
-# ### Added files:
-# [pycache/main.cpython-310.pyc, dist/app.js, .env.local, .vscode/settings.json
-# 
-# ### Deleted files:
-#     []
-# 
-# ### Modified files:
-# []
-# ### current .gitignore Content
-# *.log
-# Expected Output:
-#     #Compiled and build artifacts
-#     *.pyc
-#     pycache/
-#     *.o
-#     *.obj
-#     dist/
-#     build/
-#     #Dependencies
-#     .venv/
-#     venv/
-#     node_modules/
-#     #Logs and temp files
-#     *.log
-#     *.tmp
-#     *.swp
-#     #Environment
-#     .env
-#     .env.local
-#     .env.
-#     #Editors
-#     .vscode/
-#     .idea/
-#     #Original rules preserved
-#     *.log
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
 
-# Current case:
-# Added files: []
-# Deleted files: []
-# Modified files: ['IA_IMPROVEMENTS.md']
-# current .gitignore Content: (empty)
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# Since only a markdown file was modified and there are no build artifacts, dependencies, or temp files in the changes, output nothing.
+# C.A. Dupin Specific
+# Modelos entrenados
+*.pth
+user_patterns/patterns_model*.pth
+
+# Datos de usuario
+user_patterns/pattern_*/
+feedback.json
+roi_feedback.json
+learning_data.json
+rois_seleccionadas.json
+
+# Carpetas de trabajo (V2)
+fotos_entrenamiento/por_patron/*/
+!fotos_entrenamiento/por_patron/.gitkeep
+!fotos_entrenamiento/por_patron/README.md
+
+fotos_identificar/*/
+!fotos_identificar/.gitkeep
+!fotos_identificar/README.md
+
+# Resultados
+resultados_identificacion_*.json
+resultados_identificacion_*_reporte.txt
+detecciones_*.json
+analisis_*.jpg
+reporte_*.json
+
+# Videos temporales
+video_frames/
+output_*.mp4
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
