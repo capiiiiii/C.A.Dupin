@@ -22,17 +22,18 @@ Implementa:
 import cv2
 import numpy as np
 import json
+import shutil
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Union
+from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 from PIL import Image
+from collections import OrderedDict
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader, random_split
+from torch.utils.data import Dataset, DataLoader
 import warnings
 from tqdm import tqdm
-from functools import lru_cache
 
 warnings.filterwarnings('ignore')
 
@@ -217,43 +218,72 @@ def mixup_criterion(criterion, pred, labels_a, labels_b, lam):
 class EnhancedPatternDatasetV2(Dataset):
     """Dataset V2 mejorado con RandAugment, caching y optimizaciones."""
 
-    def __init__(self, patterns_data: List[Dict], img_size=128,
-                 augment=False, use_randaugment=True, cache_images=True):
+    def __init__(
+        self,
+        patterns_data: List[Dict],
+        img_size: int = 128,
+        augment: bool = False,
+        use_randaugment: bool = True,
+        cache_images: bool = True,
+        cache_max_items: int = 512,
+    ):
         self.patterns = patterns_data
         self.img_size = img_size
         self.augment = augment
         self.use_randaugment = use_randaugment
         self.cache_images = cache_images
+        self.cache_max_items = cache_max_items
 
-        # Cache para imágenes
-        self._image_cache = {}
+        self._image_cache: "OrderedDict[str, Image.Image]" = OrderedDict()
 
         # Transformaciones base (pre-calculadas)
         from torchvision import transforms
+
         self.base_resize = transforms.Resize((self.img_size, self.img_size))
         self.to_tensor = transforms.ToTensor()
-        self.normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                              std=[0.229, 0.224, 0.225])
+        self.normalize = transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225],
+        )
 
         if augment:
             if use_randaugment:
                 self.randaugment = RandAugment(n=2, m=10)
             else:
-                self.base_augment = transforms.Compose([
-                    transforms.RandomHorizontalFlip(p=0.5),
-                    transforms.RandomVerticalFlip(p=0.3),
-                    transforms.RandomRotation(degrees=15),
-                    transforms.ColorJitter(brightness=0.2, contrast=0.2,
-                                         saturation=0.2, hue=0.1),
-                ])
+                self.base_augment = transforms.Compose(
+                    [
+                        transforms.RandomHorizontalFlip(p=0.5),
+                        transforms.RandomVerticalFlip(p=0.3),
+                        transforms.RandomRotation(degrees=15),
+                        transforms.ColorJitter(
+                            brightness=0.2,
+                            contrast=0.2,
+                            saturation=0.2,
+                            hue=0.1,
+                        ),
+                    ]
+                )
 
     def _load_image_cached(self, image_path: str, roi: Optional[Tuple] = None) -> Image.Image:
-        """Carga imagen con cache para evitar relectura."""
-        cache_key = f"{image_path}_{roi}"
-        if cache_key in self._image_cache:
-            return self._image_cache[cache_key]
+        """Carga imagen con cache LRU para evitar relectura y limitar memoria."""
+        if not self.cache_images:
+            return self._load_image_uncached(image_path, roi)
 
-        # Cargar imagen
+        cache_key = f"{image_path}_{roi}"
+        cached = self._image_cache.pop(cache_key, None)
+        if cached is not None:
+            self._image_cache[cache_key] = cached
+            return cached
+
+        image_pil = self._load_image_uncached(image_path, roi)
+
+        self._image_cache[cache_key] = image_pil
+        if len(self._image_cache) > self.cache_max_items:
+            self._image_cache.popitem(last=False)
+
+        return image_pil
+
+    def _load_image_uncached(self, image_path: str, roi: Optional[Tuple] = None) -> Image.Image:
         image = cv2.imread(str(image_path))
         if image is None:
             raise ValueError(f"No se pudo cargar imagen: {image_path}")
@@ -267,16 +297,12 @@ class EnhancedPatternDatasetV2(Dataset):
             w = min(w, w_img - x)
             h = min(h, h_img - y)
             if w > 0 and h > 0:
-                image = image[y:y+h, x:x+w]
+                image = image[y : y + h, x : x + w]
 
         # Convertir a RGB y resize
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image_pil = Image.fromarray(image)
         image_pil = self.base_resize(image_pil)
-
-        # Guardar en cache si está habilitado
-        if self.cache_images:
-            self._image_cache[cache_key] = image_pil
 
         return image_pil
 
@@ -377,9 +403,6 @@ class ImprovedPatternNetworkV2(nn.Module):
                     nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        # Soportar channels_last memory format si está disponible
-        is_channels_last = x.is_contiguous(memory_format=torch.channels_last)
-
         x = self.initial(x)
         x = self.layer1(x)
         x = self.layer2(x)
@@ -482,6 +505,13 @@ class ImprovedPatternLearnerV2:
         self.model = None
         self.pattern_counter = 0
         self.training_history = []
+
+        # Cache / estado para inferencia (rendimiento)
+        self._inference_transforms: Dict[int, object] = {}
+        self._loaded_checkpoint_mtime: Optional[float] = None
+        self._loaded_checkpoint_num_patterns: Optional[int] = None
+        self._inference_model_compiled: bool = False
+        self._inference_channels_last: bool = False
         
         # Directorios
         self.patterns_dir = Path("user_patterns")
@@ -538,7 +568,72 @@ class ImprovedPatternLearnerV2:
                 json.dump(data, f, indent=2, ensure_ascii=False)
         except Exception as e:
             print(f"Error guardando patrones: {e}")
-    
+
+    @staticmethod
+    def _unwrap_model(model: nn.Module) -> nn.Module:
+        """Devuelve el módulo base (soporta torch.compile / DataParallel)."""
+        while True:
+            if hasattr(model, "_orig_mod"):
+                model = model._orig_mod  # type: ignore[attr-defined]
+                continue
+            if hasattr(model, "module"):
+                model = model.module  # type: ignore[assignment]
+                continue
+            return model
+
+    @staticmethod
+    def _normalize_state_dict_keys(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Normaliza claves para que funcionen aunque se haya entrenado con torch.compile."""
+        normalized: Dict[str, torch.Tensor] = {}
+        for k, v in state_dict.items():
+            if k.startswith("_orig_mod."):
+                k = k[len("_orig_mod.") :]
+            if k.startswith("module."):
+                k = k[len("module.") :]
+            normalized[k] = v
+        return normalized
+
+    @staticmethod
+    def _classifier_prefix(model: "ImprovedPatternNetworkV2") -> str:
+        last_idx = len(model.fc) - 1
+        return f"fc.{last_idx}."
+
+    def _save_model_checkpoint(self, path: str, model: Optional[nn.Module] = None, meta: Optional[Dict] = None) -> None:
+        model_to_save = self._unwrap_model(model or self.model)
+        state_dict = self._normalize_state_dict_keys(model_to_save.state_dict())
+        payload = {
+            'state_dict': state_dict,
+            'meta': {
+                'created_at': datetime.now().isoformat(),
+                'pytorch_version': torch.__version__,
+                'device': str(self.device),
+                'num_patterns': len(self.patterns),
+                **(meta or {}),
+            },
+        }
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        torch.save(payload, path)
+
+    def _get_inference_transform(self, scale: int):
+        transform = self._inference_transforms.get(scale)
+        if transform is not None:
+            return transform
+
+        from torchvision import transforms
+
+        transform = transforms.Compose(
+            [
+                transforms.Resize((scale, scale)),
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=[0.485, 0.456, 0.406],
+                    std=[0.229, 0.224, 0.225],
+                ),
+            ]
+        )
+        self._inference_transforms[scale] = transform
+        return transform
+
     def define_pattern_from_folder(self, name: str, description: str = "") -> str:
         """
         Define un patrón y crea su carpeta en fotos_entrenamiento.
@@ -560,13 +655,14 @@ class ImprovedPatternLearnerV2:
         pattern_folder = self.patterns_training_dir / name
         pattern_folder.mkdir(exist_ok=True)
         
-        # Crear archivo README
+        # Crear archivo README (sin sobrescribir si el usuario ya lo editó)
         readme_path = pattern_folder / "README.md"
-        with open(readme_path, 'w', encoding='utf-8') as f:
-            f.write(f"# Patrón: {name}\n\n")
-            f.write(f"Descripción: {description}\n\n")
-            f.write(f"Coloca aquí las fotos de entrenamiento para este patrón.\n\n")
-            f.write(f"ID del patrón: {pattern_id}\n")
+        if not readme_path.exists():
+            with open(readme_path, 'w', encoding='utf-8') as f:
+                f.write(f"# Patrón: {name}\n\n")
+                f.write(f"Descripción: {description}\n\n")
+                f.write("Coloca aquí las fotos de entrenamiento para este patrón.\n\n")
+                f.write(f"ID del patrón: {pattern_id}\n")
         
         self._save_patterns()
         print(f"✓ Patrón definido: {name}")
@@ -575,9 +671,13 @@ class ImprovedPatternLearnerV2:
         
         return pattern_id
     
-    def import_images_from_folder(self, pattern_name: str) -> int:
+    def import_images_from_folder(self, pattern_name: str, auto_create: bool = False) -> int:
         """
         Importa imágenes de la carpeta de entrenamiento.
+
+        Args:
+            pattern_name: Nombre de la carpeta/patrón
+            auto_create: Si es True, crea el patrón si no existe todavía
         """
         # Buscar el patrón por nombre
         pattern_id = None
@@ -585,47 +685,54 @@ class ImprovedPatternLearnerV2:
             if p['name'] == pattern_name:
                 pattern_id = pid
                 break
-        
+
+        if not pattern_id and auto_create:
+            pattern_id = self.define_pattern_from_folder(pattern_name, description="")
+
         if not pattern_id:
             print(f"Patrón '{pattern_name}' no encontrado")
             return 0
-        
+
         pattern_folder = self.patterns_training_dir / pattern_name
         if not pattern_folder.exists():
             print(f"Carpeta no encontrada: {pattern_folder}")
             return 0
-        
+
         # Buscar imágenes
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff'}
         images = list(pattern_folder.glob("*.*"))
         images = [img for img in images if img.suffix.lower() in image_extensions]
-        
+
         count = 0
         for img_path in tqdm(images, desc=f"Importando imágenes para {pattern_name}"):
             if self.add_pattern_sample(pattern_id, str(img_path)):
                 count += 1
-        
+
         print(f"✓ Importadas {count} imágenes para '{pattern_name}'")
         return count
-    
-    def import_all_patterns_from_folders(self) -> Dict[str, int]:
+
+    def import_all_patterns_from_folders(self, auto_create: bool = True) -> Dict[str, int]:
         """
         Importa imágenes de todas las carpetas de patrones.
+
+        Por defecto, si detecta una carpeta nueva dentro de
+        fotos_entrenamiento/por_patron/ y no existe el patrón, lo crea
+        automáticamente. Esto reduce pasos y facilita que el usuario guíe a la IA.
         """
-        results = {}
-        
+        results: Dict[str, int] = {}
+
         # Buscar todas las carpetas de patrones
         for folder in self.patterns_training_dir.iterdir():
             if folder.is_dir():
                 pattern_name = folder.name
-                count = self.import_images_from_folder(pattern_name)
+                count = self.import_images_from_folder(pattern_name, auto_create=auto_create)
                 if count > 0:
                     results[pattern_name] = count
-        
-        print(f"\n📊 Resumen de importación:")
+
+        print("\n📊 Resumen de importación:")
         for name, count in results.items():
             print(f"  - {name}: {count} imágenes")
-        
+
         return results
     
     def add_pattern_sample(self, pattern_id: str, image_path: str, 
@@ -721,22 +828,31 @@ class ImprovedPatternLearnerV2:
             num_workers = 2 if USE_AMP else 4
 
         # Preparar datos
-        training_data = []
+        training_data: List[Dict] = []
 
-        for pattern_id, pattern in self.patterns.items():
+        # Mapeo estable (mejor rendimiento que list(...).index(...) dentro del loop)
+        pattern_id_to_idx = {pid: idx for idx, pid in enumerate(self.patterns.keys())}
+
+        for pattern_id, _pattern in self.patterns.items():
             pattern_dir = self.patterns_dir / pattern_id
             if not pattern_dir.exists():
+                continue
+
+            label_idx = pattern_id_to_idx.get(pattern_id)
+            if label_idx is None:
                 continue
 
             for sample_file in pattern_dir.glob("sample_*.json"):
                 try:
                     with open(sample_file, 'r', encoding='utf-8') as f:
                         sample = json.load(f)
-                    training_data.append({
-                        'pattern_id': list(self.patterns.keys()).index(pattern_id),
-                        'image_path': sample['image_path'],
-                        'roi': sample.get('roi')
-                    })
+                    training_data.append(
+                        {
+                            'pattern_id': label_idx,
+                            'image_path': sample['image_path'],
+                            'roi': sample.get('roi'),
+                        }
+                    )
                 except Exception:
                     continue
 
@@ -747,6 +863,28 @@ class ImprovedPatternLearnerV2:
         print(f"\n🚀 Iniciando entrenamiento V2 optimizado")
         print(f"   Total de muestras: {len(training_data)}")
         print(f"   Dispositivo: {self.device}")
+
+        # Guía rápida para el usuario: balance de datos
+        idx_to_name = {idx: self.patterns[pid]['name'] for pid, idx in pattern_id_to_idx.items()}
+        counts: Dict[str, int] = {name: 0 for name in idx_to_name.values()}
+        for row in training_data:
+            counts[idx_to_name.get(int(row['pattern_id']), 'desconocido')] = counts.get(
+                idx_to_name.get(int(row['pattern_id']), 'desconocido'),
+                0,
+            ) + 1
+
+        if counts:
+            min_count = min(counts.values())
+            max_count = max(counts.values())
+            print(f"\n   📊 Distribución de muestras por patrón:")
+            for name, cnt in sorted(counts.items(), key=lambda x: x[1], reverse=True):
+                print(f"      - {name}: {cnt}")
+
+            if min_count > 0 and max_count / min_count >= 3:
+                print(
+                    "\n   ⚠️  Dataset desbalanceado (max/min >= 3). "
+                    "Sugerencias: añade más fotos a las clases con menos ejemplos o usa --focal-loss."
+                )
         print(f"\n   Técnicas de IA:")
         print(f"      - One-Cycle Learning Rate (max_lr={max_lr})")
         print(f"      - RandAugment: {'Sí' if use_randaugment else 'No'}")
@@ -984,7 +1122,14 @@ class ImprovedPatternLearnerV2:
             # Guardar mejor modelo
             if val_loss < best_val_loss and save_checkpoints:
                 best_val_loss = val_loss
-                torch.save(self.model.state_dict(), self.model_path)
+                self._save_model_checkpoint(
+                    self.model_path,
+                    meta={
+                        'compiled': compiled,
+                        'channels_last': channels_last,
+                        'best_val_loss': float(best_val_loss),
+                    },
+                )
                 print(f"  ✓ Mejor modelo guardado (val_loss: {val_loss:.4f})")
 
             # Early stopping
@@ -997,7 +1142,14 @@ class ImprovedPatternLearnerV2:
         early_stopping.restore_best_model(self.model)
         
         # Guardar modelo final
-        torch.save(self.model.state_dict(), self.model_path)
+        self._save_model_checkpoint(
+            self.model_path,
+            meta={
+                'compiled': compiled,
+                'channels_last': channels_last,
+                'best_val_loss': float(best_val_loss),
+            },
+        )
         
         # Guardar historial
         self.training_history.append({
@@ -1020,107 +1172,192 @@ class ImprovedPatternLearnerV2:
         
         return history
     
-    def recognize_pattern_multiscale(self, image_path: str, 
-                                    scales: List[int] = [96, 128, 160],
-                                    threshold: float = 0.5) -> List[Dict]:
-        """
-        Reconoce patrones usando multi-scale inference para mejor precisión.
+    def recognize_pattern_multiscale(
+        self,
+        image_path: str,
+        scales: List[int] = [96, 128, 160],
+        threshold: float = 0.5,
+        top_k: int = 0,
+    ) -> List[Dict]:
+        """Reconoce patrones usando multi-scale inference.
+
+        - Más eficiente: calcula probabilidades por escala y promedia.
+        - Permite top_k para guiar al usuario con alternativas.
         """
         if not self.patterns:
             return []
-        
+
         if not self._load_model_checkpoint():
             return []
-        
-        all_predictions = []
-        
+
+        probs_per_scale: List[np.ndarray] = []
         for scale in scales:
-            detections = self._recognize_at_scale(image_path, scale, threshold)
-            all_predictions.extend(detections)
-        
-        # Agregar predicciones del mismo patrón
-        aggregated = {}
-        for det in all_predictions:
-            pid = det['pattern_id']
-            if pid not in aggregated:
-                aggregated[pid] = {
-                    'pattern_id': pid,
-                    'pattern_name': det['pattern_name'],
-                    'probabilities': []
-                }
-            aggregated[pid]['probabilities'].append(det['probability'])
-        
-        # Promediar
-        final_detections = []
-        for pid, data in aggregated.items():
-            avg_prob = np.mean(data['probabilities'])
-            if avg_prob >= threshold:
-                final_detections.append({
-                    'pattern_id': pid,
-                    'pattern_name': data['pattern_name'],
-                    'probability': float(avg_prob),
-                    'bbox': (0, 0, 0, 0)  # Ajustar según imagen
-                })
-        
-        final_detections.sort(key=lambda x: x['probability'], reverse=True)
-        return final_detections
-    
-    def _recognize_at_scale(self, image_path: str, scale: int, 
-                           threshold: float) -> List[Dict]:
-        """Reconoce a una escala específica."""
-        from torchvision import transforms
-        
+            probs = self._predict_probabilities_at_scale(image_path, scale)
+            if probs is not None:
+                probs_per_scale.append(probs)
+
+        if not probs_per_scale:
+            return []
+
+        mean_probs = np.mean(np.stack(probs_per_scale, axis=0), axis=0)
+        return self._detections_from_probabilities(mean_probs, threshold=threshold, top_k=top_k)
+
+    def _predict_probabilities_at_scale(self, image_path: str, scale: int) -> Optional[np.ndarray]:
         image = cv2.imread(image_path)
         if image is None:
-            return []
-        
-        transform = transforms.Compose([
-            transforms.Resize((scale, scale)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], 
-                               std=[0.229, 0.224, 0.225])
-        ])
-        
+            return None
+
         image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image_pil = Image.fromarray(image_rgb)
-        image_tensor = transform(image_pil).unsqueeze(0).to(self.device)
-        
+
+        transform = self._get_inference_transform(scale)
+        image_tensor = transform(image_pil).unsqueeze(0)
+
+        if USE_AMP and self._inference_channels_last:
+            image_tensor = image_tensor.to(memory_format=torch.channels_last)
+
+        image_tensor = image_tensor.to(self.device, non_blocking=True)
+
         with torch.no_grad():
-            outputs = self.model(image_tensor)
-            probabilities = torch.softmax(outputs, dim=1)[0].cpu().numpy()
-        
+            if USE_AMP:
+                with torch.cuda.amp.autocast():
+                    outputs = self.model(image_tensor)
+            else:
+                outputs = self.model(image_tensor)
+
+            probabilities = torch.softmax(outputs, dim=1)[0].detach().cpu().numpy()
+
+        # Recortar por número de patrones reales (evita clases extra)
+        num_classes = len(self.patterns)
+        return probabilities[:num_classes]
+
+    def _detections_from_probabilities(
+        self,
+        probabilities: np.ndarray,
+        threshold: float,
+        top_k: int = 0,
+    ) -> List[Dict]:
         pattern_ids = list(self.patterns.keys())
-        detections = []
-        
-        for i, prob in enumerate(probabilities):
-            if prob >= threshold and i < len(pattern_ids):
-                pattern = self.patterns[pattern_ids[i]]
-                detections.append({
-                    'pattern_id': pattern_ids[i],
+        if len(pattern_ids) == 0:
+            return []
+
+        probs = probabilities[: len(pattern_ids)]
+
+        if top_k and top_k > 0:
+            top_idx = np.argsort(-probs)[: min(top_k, len(pattern_ids))]
+        else:
+            top_idx = np.where(probs >= threshold)[0]
+
+        detections: List[Dict] = []
+        for i in top_idx:
+            prob = float(probs[i])
+            if prob < threshold and (not top_k or top_k <= 0):
+                continue
+
+            pid = pattern_ids[int(i)]
+            pattern = self.patterns[pid]
+            detections.append(
+                {
+                    'pattern_id': pid,
                     'pattern_name': pattern['name'],
-                    'probability': float(prob)
-                })
-        
+                    'probability': prob,
+                    'bbox': (0, 0, 0, 0),
+                }
+            )
+
+        detections.sort(key=lambda x: x['probability'], reverse=True)
         return detections
     
-    def _load_model_checkpoint(self) -> bool:
-        """Carga el checkpoint del modelo."""
-        if not Path(self.model_path).exists():
+    def _load_model_checkpoint(
+        self,
+        compile_for_inference: Optional[bool] = None,
+        channels_last: bool = True,
+    ) -> bool:
+        """Carga el checkpoint del modelo.
+
+        Mejoras:
+        - Soporta checkpoints guardados como dict (state_dict + meta).
+        - Soporta modelos entrenados con torch.compile (normaliza claves).
+        - Evita recargar el modelo si no cambió el checkpoint.
+        - Si cambió el número de patrones, intenta cargar el backbone y re-inicializa el clasificador.
+        """
+        checkpoint_path = Path(self.model_path)
+        if not checkpoint_path.exists():
             return False
-        
+
+        mtime = checkpoint_path.stat().st_mtime
+        if (
+            self._loaded_checkpoint_mtime == mtime
+            and self._loaded_checkpoint_num_patterns == len(self.patterns)
+            and self.model is not None
+        ):
+            return True
+
+        if len(self.patterns) == 0:
+            return False
+
         try:
-            checkpoint = torch.load(self.model_path, map_location=self.device)
-            
-            # Adaptar si el número de clases cambió
-            if checkpoint['fc.6.weight'].size(0) != len(self.patterns):
-                # Reconstruir la última capa
-                num_classes = len(self.patterns)
-                self.model = ImprovedPatternNetworkV2(num_classes=num_classes)
-                self.model.to(self.device)
-                print("⚠ Modelo reestructurado para nuevo número de clases")
+            loaded_obj = torch.load(checkpoint_path, map_location=self.device)
+
+            if isinstance(loaded_obj, dict) and 'state_dict' in loaded_obj:
+                state_dict = loaded_obj.get('state_dict', {})
+                meta = loaded_obj.get('meta', {})
             else:
-                self.model.load_state_dict(checkpoint)
-            
+                state_dict = loaded_obj
+                meta = {}
+
+            if not isinstance(state_dict, dict):
+                raise ValueError("Formato de checkpoint no reconocido")
+
+            state_dict = self._normalize_state_dict_keys(state_dict)
+
+            num_classes = len(self.patterns)
+            model = ImprovedPatternNetworkV2(num_classes=num_classes)
+            model.to(self.device)
+
+            classifier_prefix = self._classifier_prefix(model)
+            loaded_num_classes = None
+            weight_key = f"{classifier_prefix}weight"
+            if weight_key in state_dict:
+                loaded_num_classes = int(state_dict[weight_key].shape[0])
+
+            if loaded_num_classes is not None and loaded_num_classes != num_classes:
+                filtered = {k: v for k, v in state_dict.items() if not k.startswith(classifier_prefix)}
+                model.load_state_dict(filtered, strict=False)
+                print(
+                    f"⚠ Modelo adaptado: clases en checkpoint={loaded_num_classes}, clases actuales={num_classes}. "
+                    "Backbone cargado y clasificador reinicializado."
+                )
+            else:
+                model.load_state_dict(state_dict, strict=False)
+
+            # Optimizaciones de inferencia
+            if channels_last and USE_AMP:
+                model = model.to(memory_format=torch.channels_last)
+                self._inference_channels_last = True
+
+            if compile_for_inference is None:
+                compile_for_inference = bool(PYTORCH_2_PLUS and USE_AMP)
+
+            if compile_for_inference and PYTORCH_2_PLUS:
+                try:
+                    model = torch.compile(model, mode='reduce-overhead')
+                    self._inference_model_compiled = True
+                except Exception as e:
+                    print(f"⚠ No se pudo compilar el modelo para inferencia: {e}")
+                    self._inference_model_compiled = False
+
+            self.model = model
+            self.model.eval()
+
+            self._loaded_checkpoint_mtime = mtime
+            self._loaded_checkpoint_num_patterns = num_classes
+
+            if meta:
+                compiled_flag = meta.get('compiled')
+                if compiled_flag is not None:
+                    print(f"ℹ Checkpoint entrenado con compile={compiled_flag}")
+
             return True
         except Exception as e:
             print(f"Error cargando checkpoint: {e}")
@@ -1134,41 +1371,326 @@ class ImprovedPatternLearnerV2:
                                                   scales=[128], 
                                                   threshold=threshold)
     
-    def identify_from_folder(self, output_file: str = None) -> Dict:
-        """
-        Identifica patrones en todas las imágenes de fotos_identificar/.
+    def identify_from_folder(
+        self,
+        threshold: float = 0.5,
+        output_file: Optional[str] = None,
+        top_k: int = 1,
+        include_all_images: bool = False,
+        batch_size: int = 32,
+        scale: int = 128,
+    ) -> Dict[str, List[Dict]]:
+        """Identifica patrones en todas las imágenes de fotos_identificar/.
+
+        Mejoras:
+        - Respeta umbral configurable.
+        - Puede devolver top_k alternativas (útil para revisión humana).
+        - Inferencia en batches (más rápida en GPU).
+
+        Args:
+            threshold: Umbral para considerar una detección como válida.
+            output_file: Ruta del archivo JSON de salida.
+            top_k: Si >1, devuelve alternativas ordenadas por probabilidad.
+            include_all_images: Si True, incluye todas las imágenes aunque el top-1 esté por debajo del umbral.
+            batch_size: Tamaño de batch para inferencia.
+            scale: Tamaño de entrada (por defecto 128).
         """
         if output_file is None:
             output_file = f"resultados_identificacion_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        
-        # Buscar imágenes
+
+        if not self._load_model_checkpoint():
+            print("❌ No se pudo cargar el modelo V2")
+            return {}
+
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff'}
-        images = list(self.identify_dir.glob("*.*"))
-        images = [img for img in images if img.suffix.lower() in image_extensions]
-        
+        images = [img for img in self.identify_dir.glob("*.*") if img.suffix.lower() in image_extensions]
+        images = sorted(images)
+
         if not images:
             print("No hay imágenes en fotos_identificar/")
             return {}
-        
+
+        effective_top_k = max(1, int(top_k))
+
         print(f"\n🔍 Identificando patrones en {len(images)} imágenes...")
-        
-        results = {}
+        print(f"   Umbral: {threshold:.0%} | top_k: {effective_top_k} | batch_size: {batch_size}")
+
+        transform = self._get_inference_transform(scale)
+
+        results: Dict[str, List[Dict]] = {}
+        batch_tensors: List[torch.Tensor] = []
+        batch_paths: List[str] = []
+
+        def flush_batch():
+            if not batch_tensors:
+                return
+
+            batch = torch.stack(batch_tensors, dim=0)
+            if USE_AMP and self._inference_channels_last:
+                batch = batch.to(memory_format=torch.channels_last)
+
+            batch = batch.to(self.device, non_blocking=True)
+
+            with torch.no_grad():
+                if USE_AMP:
+                    with torch.cuda.amp.autocast():
+                        outputs = self.model(batch)
+                else:
+                    outputs = self.model(batch)
+
+                probs = torch.softmax(outputs, dim=1).detach().cpu().numpy()
+
+            for path_str, prob_vec in zip(batch_paths, probs):
+                prob_vec = prob_vec[: len(self.patterns)]
+                detections = self._detections_from_probabilities(
+                    prob_vec,
+                    threshold=threshold,
+                    top_k=effective_top_k,
+                )
+
+                if include_all_images or (detections and detections[0]['probability'] >= threshold):
+                    results[path_str] = detections
+                    top_det = detections[0]
+                    img_name = Path(path_str).name
+                    status = "✅" if top_det['probability'] >= threshold else "⚠️"
+                    tqdm.write(f"  {status} {img_name}: {top_det['pattern_name']} ({top_det['probability']:.2%})")
+
+            batch_tensors.clear()
+            batch_paths.clear()
+
         for img_path in tqdm(images):
-            detections = self.recognize_pattern(str(img_path), threshold=0.5)
-            if detections:
-                results[str(img_path)] = detections
-                print(f"  {img_path.name}: {detections[0]['pattern_name']} ({detections[0]['probability']:.2%})")
-        
-        # Guardar resultados
+            image = cv2.imread(str(img_path))
+            if image is None:
+                continue
+
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            image_pil = Image.fromarray(image_rgb)
+            tensor = transform(image_pil)
+            batch_tensors.append(tensor)
+            batch_paths.append(str(img_path))
+
+            if len(batch_tensors) >= batch_size:
+                flush_batch()
+
+        flush_batch()
+
         with open(output_file, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
-        
+
         print(f"\n✓ Resultados guardados en: {output_file}")
-        
-        # Generar reporte
+
         self._generate_identification_report(results, output_file.replace('.json', '_reporte.txt'))
-        
+
         return results
+
+    def review_identification_results(
+        self,
+        results: Dict[str, List[Dict]],
+        add_to_training: bool = True,
+        file_action: str = 'copy',
+    ) -> Dict[str, int]:
+        """Revisión humana (texto) para guiar a la IA.
+
+        Permite aprobar/corregir el top-1 y, opcionalmente, añadir la imagen al set de entrenamiento.
+
+        Args:
+            results: Salida de identify_from_folder (idealmente con top_k>=3 e include_all_images=True)
+            add_to_training: Si True, copia/mueve la imagen al patrón correcto y la registra como muestra.
+            file_action: 'copy' o 'move'
+
+        Returns:
+            Resumen de acciones.
+        """
+        if not results:
+            print("No hay resultados para revisar")
+            return {'reviewed': 0, 'approved': 0, 'corrected': 0, 'skipped': 0}
+
+        file_action = file_action.lower().strip()
+        if file_action not in {'copy', 'move'}:
+            raise ValueError("file_action debe ser 'copy' o 'move'")
+
+        # Feedback acumulado
+        feedback_path = self.patterns_dir / 'review_feedback_v2.json'
+        feedback_entries: List[Dict] = []
+        if feedback_path.exists():
+            try:
+                with open(feedback_path, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, list):
+                        feedback_entries = loaded
+            except Exception:
+                feedback_entries = []
+
+        summary = {'reviewed': 0, 'approved': 0, 'corrected': 0, 'skipped': 0}
+
+        ordered_items = list(results.items())
+        print("\n=== Revisión humana V2 ===")
+        print("Controles:")
+        print("  [ENTER] aprobar top-1")
+        print("  c       corregir (elegir patrón)")
+        print("  s       saltar")
+        print("  q       salir")
+
+        for image_path, detections in ordered_items:
+            summary['reviewed'] += 1
+            img_name = Path(image_path).name
+
+            print(f"\n🖼️  {img_name}")
+            for i, det in enumerate(detections[:5], 1):
+                print(f"  {i}. {det['pattern_name']} ({det['probability']:.2%})")
+
+            predicted = detections[0] if detections else None
+            predicted_name = predicted['pattern_name'] if predicted else None
+
+            try:
+                action = input("Acción [ENTER/c/s/q]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print("\nFinalizando revisión...")
+                break
+
+            if action == 'q':
+                break
+            if action == 's':
+                summary['skipped'] += 1
+                continue
+
+            if action == 'c':
+                # Listado de patrones actuales
+                pattern_names = [p['name'] for p in self.patterns.values()]
+                for idx, name in enumerate(pattern_names, 1):
+                    print(f"  {idx}. {name}")
+
+                try:
+                    choice = input("Patrón correcto (número o nombre; vacío=cancelar): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print("Cancelado")
+                    summary['skipped'] += 1
+                    continue
+
+                if not choice:
+                    summary['skipped'] += 1
+                    continue
+
+                correct_name = None
+                if choice.isdigit():
+                    num = int(choice)
+                    if 1 <= num <= len(pattern_names):
+                        correct_name = pattern_names[num - 1]
+                else:
+                    correct_name = choice
+
+                if not correct_name:
+                    summary['skipped'] += 1
+                    continue
+
+                # Crear patrón si no existe
+                correct_id = None
+                for pid, p in self.patterns.items():
+                    if p['name'] == correct_name:
+                        correct_id = pid
+                        break
+                if correct_id is None:
+                    correct_id = self.define_pattern_from_folder(correct_name, description="")
+
+                # Registrar feedback
+                if predicted_name:
+                    for pid, p in self.patterns.items():
+                        if p['name'] == predicted_name:
+                            p['corrected'] = int(p.get('corrected', 0)) + 1
+                            break
+
+                feedback_entries.append(
+                    {
+                        'type': 'correction',
+                        'image_path': image_path,
+                        'predicted': predicted_name,
+                        'correct': correct_name,
+                        'timestamp': datetime.now().isoformat(),
+                    }
+                )
+
+                if add_to_training:
+                    self._add_image_as_training_sample(image_path, correct_id, correct_name, file_action=file_action)
+
+                summary['corrected'] += 1
+                self._save_patterns()
+                continue
+
+            # Por defecto: aprobar
+            if not predicted_name:
+                summary['skipped'] += 1
+                continue
+
+            for pid, p in self.patterns.items():
+                if p['name'] == predicted_name:
+                    p['approved'] = int(p.get('approved', 0)) + 1
+                    break
+
+            feedback_entries.append(
+                {
+                    'type': 'approval',
+                    'image_path': image_path,
+                    'predicted': predicted_name,
+                    'timestamp': datetime.now().isoformat(),
+                }
+            )
+
+            if add_to_training:
+                # Aprobado -> añadimos como muestra del patrón predicho
+                approved_id = None
+                for pid, p in self.patterns.items():
+                    if p['name'] == predicted_name:
+                        approved_id = pid
+                        break
+                if approved_id is not None:
+                    self._add_image_as_training_sample(image_path, approved_id, predicted_name, file_action=file_action)
+
+            summary['approved'] += 1
+            self._save_patterns()
+
+        try:
+            with open(feedback_path, 'w', encoding='utf-8') as f:
+                json.dump(feedback_entries, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠ No se pudo guardar review_feedback_v2.json: {e}")
+
+        print("\n✅ Revisión finalizada")
+        print(f"   Revisadas: {summary['reviewed']}")
+        print(f"   Aprobadas: {summary['approved']}")
+        print(f"   Corregidas: {summary['corrected']}")
+        print(f"   Saltadas: {summary['skipped']}")
+
+        if add_to_training:
+            print("\n💡 Siguiente paso recomendado: re-entrenar")
+            print("   python dupin.py entrenar-patrones-v2 --epochs 30")
+
+        return summary
+
+    def _add_image_as_training_sample(self, image_path: str, pattern_id: str, pattern_name: str, file_action: str = 'copy') -> Optional[str]:
+        """Copia/mueve una imagen a la carpeta de entrenamiento del patrón y la registra como muestra."""
+        src = Path(image_path)
+        if not src.exists():
+            return None
+
+        dest_dir = self.patterns_training_dir / pattern_name
+        dest_dir.mkdir(exist_ok=True)
+
+        dest_path = dest_dir / src.name
+        if dest_path.exists():
+            dest_path = dest_dir / f"{src.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S')}{src.suffix}"
+
+        try:
+            if file_action == 'move':
+                shutil.move(str(src), str(dest_path))
+            else:
+                shutil.copy2(str(src), str(dest_path))
+        except Exception as e:
+            print(f"⚠ Error copiando/moviendo {src} -> {dest_path}: {e}")
+            return None
+
+        # Registrar muestra apuntando a la copia final
+        self.add_pattern_sample(pattern_id, str(dest_path))
+        return str(dest_path)
     
     def _generate_identification_report(self, results: Dict, output_path: str):
         """Genera un reporte legible de identificaciones."""
@@ -1178,16 +1700,18 @@ class ImprovedPatternLearnerV2:
             f.write(f"  Generado: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
             f.write("═════════════════════════════════════════════════════════\n\n")
             
-            # Estadísticas por patrón
+            # Estadísticas por patrón (contamos solo el TOP-1 por imagen)
             pattern_counts = {}
-            for img_path, detections in results.items():
-                for det in detections:
-                    name = det['pattern_name']
-                    if name not in pattern_counts:
-                        pattern_counts[name] = {'count': 0, 'avg_conf': 0}
-                    pattern_counts[name]['count'] += 1
-                    pattern_counts[name]['avg_conf'] += det['probability']
-            
+            for _img_path, detections in results.items():
+                if not detections:
+                    continue
+                det = detections[0]
+                name = det['pattern_name']
+                if name not in pattern_counts:
+                    pattern_counts[name] = {'count': 0, 'avg_conf': 0}
+                pattern_counts[name]['count'] += 1
+                pattern_counts[name]['avg_conf'] += det['probability']
+
             for name, data in pattern_counts.items():
                 data['avg_conf'] /= data['count']
             
@@ -1208,8 +1732,18 @@ class ImprovedPatternLearnerV2:
             for img_path, detections in results.items():
                 img_name = Path(img_path).name
                 f.write(f"🖼️  {img_name}\n")
-                for det in detections:
-                    f.write(f"   └─ {det['pattern_name']} ({det['probability']:.2%})\n")
+
+                if not detections:
+                    f.write("   └─ (sin detecciones)\n\n")
+                    continue
+
+                top = detections[0]
+                f.write(f"   └─ TOP: {top['pattern_name']} ({top['probability']:.2%})\n")
+
+                if len(detections) > 1:
+                    for alt in detections[1: min(4, len(detections))]:
+                        f.write(f"      · Alt: {alt['pattern_name']} ({alt['probability']:.2%})\n")
+
                 f.write("\n")
         
         print(f"✓ Reporte generado: {output_path}")

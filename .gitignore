@@ -41,6 +41,7 @@ user_patterns/patterns_model*.pth
 
 # Datos de usuario
 user_patterns/pattern_*/
+user_patterns/review_feedback_v2.json
 feedback.json
 roi_feedback.json
 learning_data.json
