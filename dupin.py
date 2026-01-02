@@ -1007,45 +1007,33 @@ def importar_entrenamiento(language_manager=None):
     return results
 
 
-def entrenar_patrones_v2(epochs=30, batch_size=16, val_split=0.2, 
+def entrenar_patrones_v2(epochs=30, batch_size=16, val_split=0.2,
                         learning_rate=0.001, max_lr=0.01,
-                        use_focal_loss=False, label_smoothing=0.0, 
+                        use_focal_loss=False, label_smoothing=0.0,
                         early_stopping_patience=10, warmup_epochs=3,
-                        dropout_rate=0.4, use_mixup=True, 
+                        dropout_rate=0.4, use_mixup=True,
                         use_randaugment=True, gradient_accumulation=1,
+                        use_amp=None, use_compile=None,
+                        use_gradient_checkpointing=False,
+                        num_workers=None, channels_last=True,
                         language_manager=None):
     """
-    Entrena el modelo V2 con todas las técnicas avanzadas.
+    Entrena el modelo V2 con todas las técnicas avanzadas y optimizaciones de rendimiento.
     """
     pattern_learner = ImprovedPatternLearnerV2()
-    
+
     print(f"\n=== C.A. Dupin V2 - Entrenamiento Mejorado ===")
-    
+
     patterns = pattern_learner.list_patterns()
     if not patterns:
         print("❌ No hay patrones definidos.")
         print("   Crea patrones con: python dupin.py crear-patron-v2 <nombre>")
         return None
-    
+
     print(f"📊 Patrones encontrados: {len(patterns)}")
     for p in patterns:
         print(f"   • {p['name']}: {p['samples']} muestras (carpeta: {p['folder_images']} imágenes)")
-    
-    print(f"\n🔧 Configuración avanzada:")
-    print(f"   Épocas: {epochs}")
-    print(f"   Batch size: {batch_size}")
-    print(f"   Learning rate: {learning_rate} (max: {max_lr})")
-    print(f"   Validación: {val_split*100:.0f}%")
-    print(f"   One-Cycle LR: ✓")
-    print(f"   RandAugment: {'✓' if use_randaugment else '✗'}")
-    print(f"   Mixup: {'✓' if use_mixup else '✗'}")
-    print(f"   Gradient Accumulation: {gradient_accumulation}x")
-    print(f"   Warmup: {warmup_epochs} épocas")
-    print(f"   Focal Loss: {'✓' if use_focal_loss else '✗'}")
-    print(f"   Label Smoothing: {label_smoothing}")
-    print(f"   Early Stopping: {early_stopping_patience} épocas")
-    print(f"   Dropout: {dropout_rate}")
-    
+
     history = pattern_learner.train_patterns_v2(
         epochs=epochs,
         batch_size=batch_size,
@@ -1060,9 +1048,14 @@ def entrenar_patrones_v2(epochs=30, batch_size=16, val_split=0.2,
         use_mixup=use_mixup,
         use_randaugment=use_randaugment,
         gradient_accumulation_steps=gradient_accumulation,
-        save_checkpoints=True
+        save_checkpoints=True,
+        use_amp=use_amp,
+        use_compile=use_compile,
+        use_gradient_checkpointing=use_gradient_checkpointing,
+        num_workers=num_workers,
+        channels_last=channels_last
     )
-    
+
     if history:
         print(f"\n✅ Entrenamiento completado exitosamente")
         print(f"💾 Modelo guardado en: user_patterns/patterns_model_v2.pth")
@@ -1553,7 +1546,7 @@ Ejemplos de uso:
     
     # Comando: entrenar-patrones-v2
     entrenar_patrones_v2_parser = subparsers.add_parser('entrenar-patrones-v2',
-                                                       help='V2: Entrenar modelo con técnicas de IA avanzadas')
+                                                      help='V2: Entrenar modelo con técnicas de IA avanzadas y optimizaciones')
     entrenar_patrones_v2_parser.add_argument('--epochs', type=int, default=30,
                                           help='Número de épocas (default: 30)')
     entrenar_patrones_v2_parser.add_argument('--batch-size', type=int, default=16,
@@ -1580,6 +1573,22 @@ Ejemplos de uso:
                                           help='Desactivar RandAugment')
     entrenar_patrones_v2_parser.add_argument('--grad-accum', type=int, default=1,
                                           help='Gradient accumulation steps (default: 1)')
+
+    # Optimizaciones de rendimiento
+    entrenar_patrones_v2_parser.add_argument('--use-amp', action='store_true', default=None,
+                                          help='Usar Automatic Mixed Precision (auto: True en GPU)')
+    entrenar_patrones_v2_parser.add_argument('--no-amp', action='store_true',
+                                          help='Desactivar Automatic Mixed Precision')
+    entrenar_patrones_v2_parser.add_argument('--use-compile', action='store_true', default=None,
+                                          help='Usar torch.compile (auto: True si PyTorch 2.0+)')
+    entrenar_patrones_v2_parser.add_argument('--no-compile', action='store_true',
+                                          help='Desactivar torch.compile')
+    entrenar_patrones_v2_parser.add_argument('--use-gradient-checkpointing', action='store_true',
+                                          help='Usar gradient checkpointing para ahorrar memoria')
+    entrenar_patrones_v2_parser.add_argument('--num-workers', type=int, default=None,
+                                          help='Workers para DataLoader (auto: 4 si CPU, 2 si GPU)')
+    entrenar_patrones_v2_parser.add_argument('--no-channels-last', action='store_true',
+                                          help='Desactivar channels_last memory format')
     
     # Comando: reconocer-v2
     reconocer_v2_parser = subparsers.add_parser('reconocer-v2',
@@ -1739,6 +1748,10 @@ Ejemplos de uso:
     elif args.comando == 'importar-entrenamiento':
         importar_entrenamiento(language_manager=language_manager)
     elif args.comando == 'entrenar-patrones-v2':
+        # Manejar argumentos booleanos para optimizaciones
+        use_amp = args.use_amp if args.use_amp is not None else (not args.no_amp if args.no_amp else None)
+        use_compile = args.use_compile if args.use_compile is not None else (not args.no_compile if args.no_compile else None)
+
         entrenar_patrones_v2(
             epochs=args.epochs,
             batch_size=args.batch_size,
@@ -1753,6 +1766,11 @@ Ejemplos de uso:
             use_mixup=not args.no_mixup,
             use_randaugment=not args.no_randaugment,
             gradient_accumulation=args.grad_accum,
+            use_amp=use_amp,
+            use_compile=use_compile,
+            use_gradient_checkpointing=args.use_gradient_checkpointing,
+            num_workers=args.num_workers,
+            channels_last=not args.no_channels_last,
             language_manager=language_manager
         )
     elif args.comando == 'reconocer-v2':
