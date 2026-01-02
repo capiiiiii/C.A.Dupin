@@ -1065,28 +1065,60 @@ def entrenar_patrones_v2(epochs=30, batch_size=16, val_split=0.2,
         return None
 
 
-def identificar_carpetas_v2(threshold=0.5, output_file=None, language_manager=None):
-    """
-    Identifica patrones en todas las imágenes de fotos_identificar/.
+def identificar_carpetas_v2(
+    threshold=0.5,
+    output_file=None,
+    revisar=False,
+    top_k=1,
+    incluir_todas=False,
+    agregar=True,
+    mover=False,
+    batch_size=32,
+    language_manager=None,
+):
+    """Identifica patrones en fotos_identificar/ con el sistema V2.
+
+    Mejoras:
+    - Permite revisión humana para guiar a la IA y alimentar el set de entrenamiento.
+    - Inferencia por lotes para mejor rendimiento.
     """
     pattern_learner = ImprovedPatternLearnerV2()
-    
+
     print(f"\n=== C.A. Dupin V2 - Identificar desde Carpeta ===")
     print(f"📁 Buscando imágenes en fotos_identificar/...")
-    
+
     # Verificar que el modelo existe
     model_info = pattern_learner.get_model_info()
     if not model_info['model_exists']:
         print(f"\n❌ No hay modelo entrenado.")
         print(f"   Primero entrena con: python dupin.py entrenar-patrones-v2")
         return {}
-    
+
     print(f"📊 Modelo: {model_info['model_size_mb']:.2f} MB")
     print(f"🎯 Patrones entrenados: {model_info['num_patterns']}")
     print(f"   {', '.join(model_info['pattern_names'])}")
-    
-    results = pattern_learner.identify_from_folder(output_file=output_file)
-    
+
+    # Si se revisa, conviene incluir todas las imágenes y traer alternativas
+    if revisar:
+        incluir_todas = True
+        top_k = max(int(top_k), 3)
+
+    results = pattern_learner.identify_from_folder(
+        threshold=threshold,
+        output_file=output_file,
+        top_k=int(top_k),
+        include_all_images=incluir_todas,
+        batch_size=int(batch_size),
+    )
+
+    if revisar:
+        file_action = 'move' if mover else 'copy'
+        pattern_learner.review_identification_results(
+            results,
+            add_to_training=bool(agregar),
+            file_action=file_action,
+        )
+
     return results
 
 
@@ -1601,11 +1633,23 @@ Ejemplos de uso:
     
     # Comando: identificar-v2
     identificar_v2_parser = subparsers.add_parser('identificar-v2',
-                                                help='V2: Identificar patrones en todas las imágenes de fotos_identificar/')
+                                                 help='V2: Identificar patrones en todas las imágenes de fotos_identificar/')
     identificar_v2_parser.add_argument('--umbral', type=float, default=0.5,
                                      help='Umbral de confianza (0.0-1.0)')
     identificar_v2_parser.add_argument('--output', help='Ruta del archivo JSON de salida')
-    
+    identificar_v2_parser.add_argument('--top-k', type=int, default=1,
+                                     help='Guardar top-K predicciones por imagen (útil para revisión, default: 1)')
+    identificar_v2_parser.add_argument('--incluir-todas', action='store_true',
+                                     help='Incluir todas las imágenes aunque queden por debajo del umbral')
+    identificar_v2_parser.add_argument('--batch-size', type=int, default=32,
+                                     help='Batch size para inferencia (default: 32)')
+    identificar_v2_parser.add_argument('--revisar', action='store_true',
+                                     help='Revisar interactivamente y guiar a la IA (aprobando/corrigiendo)')
+    identificar_v2_parser.add_argument('--no-agregar', action='store_true',
+                                     help='En modo --revisar: no copiar/mover imágenes a entrenamiento')
+    identificar_v2_parser.add_argument('--mover', action='store_true',
+                                     help='En modo --revisar: mover (en vez de copiar) las imágenes al set de entrenamiento')
+
     # Comando: listar-patrones-v2
     listar_patrones_v2_parser = subparsers.add_parser('listar-patrones-v2',
                                                    help='V2: Listar patrones con información detallada')
@@ -1784,7 +1828,13 @@ Ejemplos de uso:
         identificar_carpetas_v2(
             threshold=args.umbral,
             output_file=args.output,
-            language_manager=language_manager
+            revisar=args.revisar,
+            top_k=args.top_k,
+            incluir_todas=args.incluir_todas,
+            agregar=not args.no_agregar,
+            mover=args.mover,
+            batch_size=args.batch_size,
+            language_manager=language_manager,
         )
     elif args.comando == 'listar-patrones-v2':
         listar_patrones_v2(language_manager=language_manager)

@@ -224,12 +224,27 @@ Opciones:
 Identifica patrones en todas las imágenes de `fotos_identificar/`.
 
 ```bash
+# Identificación estándar (solo guarda detecciones por encima del umbral)
 python dupin.py identificar-v2 --umbral 0.6 --output resultados.json
+
+# Guardar alternativas (top-k) por imagen
+python dupin.py identificar-v2 --umbral 0.6 --top-k 3 --output resultados.json
+
+# Revisión humana interactiva (GUIA a la IA): aprueba/corrige y añade muestras para re-entrenar
+python dupin.py identificar-v2 --umbral 0.6 --revisar --top-k 3 --incluir-todas
+
+# En revisión: mover en vez de copiar al set de entrenamiento
+python dupin.py identificar-v2 --revisar --mover
+
+# En revisión: no agregar al set de entrenamiento (solo registrar feedback)
+python dupin.py identificar-v2 --revisar --no-agregar
 ```
 
 Genera:
 - Archivo JSON con resultados
-- Reporte legible en texto con estadísticas
+- Reporte legible en texto con estadísticas (TOP-1 por imagen)
+- (Opcional con `--revisar`) `user_patterns/review_feedback_v2.json` con aprobaciones/correcciones
+- (Opcional con `--revisar`) copia/mueve imágenes al patrón correcto en `fotos_entrenamiento/por_patron/` y las registra como nuevas muestras
 
 ### listar-patrones-v2
 Lista todos los patrones con información detallada.
