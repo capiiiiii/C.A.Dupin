@@ -82,6 +82,73 @@ class GradientCheckpointingWrapper(nn.Module):
         return self.module(x)
 
 
+class InvertedResidualSE(nn.Module):
+    """Inverted Residual Block con SE Block (MobileNetV3-style) para eficiencia."""
+    
+    def __init__(self, in_channels, out_channels, stride=1, expand_ratio=6):
+        super(InvertedResidualSE, self).__init__()
+        self.stride = stride
+        hidden_dim = int(round(in_channels * expand_ratio))
+        self.use_res_connect = self.stride == 1 and in_channels == out_channels
+        
+        self.conv = nn.Sequential(
+            # Expansion conv
+            nn.Conv2d(in_channels, hidden_dim, 1, 1, 0, bias=False),
+            nn.BatchNorm2d(hidden_dim),
+            nn.ReLU6(inplace=True),
+            # Depthwise conv
+            nn.Conv2d(hidden_dim, hidden_dim, 3, stride, 1, groups=hidden_dim, bias=False),
+            nn.BatchNorm2d(hidden_dim),
+            nn.ReLU6(inplace=True),
+            # SE Block
+            SEBlock(hidden_dim, reduction=4),
+            # Projection conv
+            nn.Conv2d(hidden_dim, out_channels, 1, 1, 0, bias=False),
+            nn.BatchNorm2d(out_channels),
+        )
+
+    def forward(self, x):
+        if self.use_res_connect:
+            return x + self.conv(x)
+        else:
+            return self.conv(x)
+
+
+class EfficientChannelAttention(nn.Module):
+    """Eficient Channel Attention (ECA) - menos parámetros que SE Block."""
+    def __init__(self, channels, gamma=2, b=1):
+        super(EfficientChannelAttention, self).__init__()
+        t = int(abs((np.log(channels) / np.log(2)) + b) / gamma)
+        k = t if t % 2 else t + 1
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=k, padding=(k - 1) // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        y = self.avg_pool(x)
+        y = self.conv(y.squeeze(-1).transpose(-1, -2)).transpose(-1, -2).unsqueeze(-1)
+        return x * self.sigmoid(y).expand_as(x)
+
+
+class CoordConv(nn.Module):
+    """CoordConv para ayudar a la red a entender coordenadas espaciales."""
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0):
+        super(CoordConv, self).__init__()
+        self.conv = nn.Conv2d(in_channels + 2, out_channels, kernel_size, stride, padding, bias=False)
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        batch_size, _, h, w = x.size()
+        # Agregar coordenadas
+        i = torch.arange(h, dtype=x.dtype, device=x.device)[None, None, :, None]
+        j = torch.arange(w, dtype=x.dtype, device=x.device)[None, None, None, :]
+        i = i.expand(batch_size, 1, h, w)
+        j = j.expand(batch_size, 1, h, w)
+        x = torch.cat([x, i / (h - 1), j / (w - 1)], dim=1)
+        return self.relu(self.bn(self.conv(x)))
+
+
 class ResidualBlockSE(nn.Module):
     """Bloque residual con SE Block optimizado."""
 
@@ -335,55 +402,64 @@ class EnhancedPatternDatasetV2(Dataset):
 
 class ImprovedPatternNetworkV2(nn.Module):
     """
-    Red neuronal V2 mejorada con SE Blocks y arquitectura más potente.
-    Optimizada con gradient checkpointing y channels last memory format.
+    Red neuronal V3 ultra-eficiente con Inverted Residuals, CoordConv y ECA.
+    Optimizada para velocidad, memoria y precisión en clasificación visual.
     """
 
-    def __init__(self, num_classes=10, dropout_rate=0.4, use_gradient_checkpointing=False):
+    def __init__(self, num_classes=10, dropout_rate=0.3, use_gradient_checkpointing=False):
         super(ImprovedPatternNetworkV2, self).__init__()
 
         self.use_gradient_checkpointing = use_gradient_checkpointing
 
-        # Capas iniciales
-        self.initial = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        # Stem con CoordConv para entender mejor coordenadas espaciales
+        self.stem = nn.Sequential(
+            CoordConv(3, 32, kernel_size=3, stride=2, padding=1),  # 64x64
+            nn.MaxPool2d(kernel_size=3, stride=2, padding=1)       # 32x32
         )
 
-        # Bloques residuales con SE
-        self.layer1 = self._make_layer(64, 64, 2, stride=1)
-        self.layer2 = self._make_layer(64, 128, 2, stride=2)
-        self.layer3 = self._make_layer(128, 256, 3, stride=2)  # Más profundo
-        self.layer4 = self._make_layer(256, 512, 3, stride=2)  # Más profundo
+        # Agregar información previa: para ~10-50 clases, profundidad moderada es mejor
+        # MobileNetV3-style Inverted Residuals (más eficientes que resnet convencional)
+        # Número de bloques sintonizado para 128x128 inputs y ensembles más pequeños
+        self.blocks = nn.Sequential(
+            self._make_layer(32, 64, 2, stride=1, use_inverted=True),   # 32x32
+            self._make_layer(64, 96, 2, stride=2, use_inverted=True),   # 16x16
+            self._make_layer(96, 160, 3, stride=2, use_inverted=True),  # 8x8
+            self._make_layer(160, 256, 2, stride=2, use_inverted=True), # 4x4
+        )
 
-        # Capas fully connected mejoradas
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.fc = nn.Sequential(
-            nn.Linear(512, 1024),
-            nn.BatchNorm1d(1024),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate),
-
-            nn.Linear(1024, 512),
+        # ECA (los canales más eficientes) + clasificador
+        self.global_pool = nn.AdaptiveAvgPool2d(1)
+        self.eca = EfficientChannelAttention(256, reduction=4)
+        self.classifier = nn.Sequential(
+            nn.Linear(256, 512),
             nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
+            nn.ReLU6(inplace=True),
+            nn.Dropout(dropout_rate),
+            
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU6(inplace=True),
             nn.Dropout(dropout_rate * 0.5),
-
-            nn.Linear(512, num_classes)
+            
+            nn.Linear(256, num_classes)
         )
 
         self._initialize_weights()
 
-    def _make_layer(self, in_channels, out_channels, blocks, stride):
-        """Crea una capa con bloques residuales con SE."""
+    def _make_layer(self, in_channels, out_channels, blocks, stride=1, use_inverted=True):
+        """Crea una capa con bloques residuales (mejorados o inverted)."""
         layers = []
-        layers.append(ResidualBlockSE(in_channels, out_channels, stride))
-        for _ in range(1, blocks):
-            layers.append(ResidualBlockSE(out_channels, out_channels))
+        for i in range(blocks):
+            block_stride = stride if i == 0 else 1
+            block_in = in_channels if i == 0 else out_channels
+            if use_inverted:
+                # Inverted residual para eficiencia (MobileNetV3)
+                layers.append(InvertedResidualSE(block_in, out_channels, block_stride, expand_ratio=6))
+            else:
+                # Bloque residual tradicional con SE
+                layers.append(ResidualBlockSE(block_in, out_channels, block_stride))
 
-        # Aplicar gradient checkpointing si está habilitado
+        # Aplicar gradient checkpointing si está habilitado (ahorro memoria)
         if self.use_gradient_checkpointing:
             return nn.Sequential(*[GradientCheckpointingWrapper(block) for block in layers])
         return nn.Sequential(*layers)
@@ -392,27 +468,21 @@ class ImprovedPatternNetworkV2(nn.Module):
         """Inicializa los pesos de la red de manera más eficiente."""
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out',
-                                      nonlinearity='relu')
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
             elif isinstance(m, nn.BatchNorm2d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
-                nn.init.trunc_normal_(m.weight, std=0.02)  # Mejor para transformers y redes profundas
+                nn.init.trunc_normal_(m.weight, std=0.02)  # Mejor para deep nets
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        x = self.initial(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        x = self.fc(x)
-
+        x = self.stem(x)
+        x = self.blocks(x)
+        x = self.global_pool(x)
+        x = self.eca(x).flatten(1)  # ECA antes del clasificador
+        x = self.classifier(x)
         return x
 
 
@@ -492,10 +562,57 @@ class EarlyStoppingV2:
             model.load_state_dict(self.best_weights)
 
 
+class AdaptiveTrainingConfig:
+    """Auto-configurador inteligente basado en análisis del dataset."""
+    
+    @staticmethod
+    def analyze_dataset(patterns: Dict) -> Dict:
+        """Analiza el dataset y sugiere configuraciones óptimas."""
+        total_samples = sum(p['samples'] for p in patterns.values())
+        num_classes = len(patterns)
+        
+        # Distribución por clase
+        class_counts = [p['samples'] for p in patterns.values()]
+        min_samples = min(class_counts) if class_counts else 1
+        max_samples = max(class_counts) if class_counts else 1
+        imbalance_ratio = max_samples / min_samples if min_samples > 0 else 1
+        
+        # Configuraciones auto-ajustadas
+        config = {
+            'epochs': 30 if total_samples < 500 else 50,
+            'batch_size': 32 if total_samples >= 200 else 16,
+            'use_focal_loss': imbalance_ratio > 3.0,
+            'use_mixup': total_samples >= 100,  # Necesita suficientes datos
+            'learning_rate': 0.002 if num_classes <= 10 else 0.001,
+            'warmup_epochs': 3 if total_samples >= 100 else 1,
+            'early_stopping_patience': 10 if total_samples >= 200 else 7,
+            'dropout_rate': 0.3 if total_samples >= 100 else 0.2,
+            'use_randaugment': total_samples >= 50,  # No sobre-augmentar con poco data
+            'gradient_accumulation_steps': 1,  # Auto ajustable según VRAM
+            'use_amp': True,  # Activar si GPU disponible
+            'use_gradient_checkpointing': total_samples > 500,  # Ahorro memoria en datasets grandes
+        }
+        
+        # Sugerencias para el usuario
+        suggestions = []
+        if imbalance_ratio > 5:
+            suggestions.append("⚠️  Dataset muy desbalanceado. Añade más muestras a las clases con menos ejemplos.")
+        if total_samples < 50:
+            suggestions.append("📊 Dataset pequeño. Considera añadir más fotos para mejorar generalización.")
+        if num_classes > 30:
+            suggestions.append("📐 Muchas clases. Usa arquitectura más profunda (no implementado aquí).")
+        
+        config['suggestions'] = suggestions
+        config['imbalance_ratio'] = imbalance_ratio
+        config['total_samples'] = total_samples
+        
+        return config
+
+
 class ImprovedPatternLearnerV2:
     """
-    Sistema V2 mejorado para aprender patrones visuales.
-    Incluye todas las técnicas de IA avanzadas.
+    Sistema V3 ultra-inteligente para aprender patrones visuales.
+    Incluye auto-configuración, insights y UI mejorada.
     """
     
     def __init__(self, model_path: str = "user_patterns/patterns_model_v2.pth"):
