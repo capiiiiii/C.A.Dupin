@@ -358,7 +358,7 @@ class VisualInterface:
         # Marcar detecciones de verdad de campo como no evaluadas
         gt_evaluated = [False] * len(ground_truth)
         
-        for detection in self.detections:
+        for detection in self.detectections:
             best_iou = 0
             best_gt_idx = -1
             
@@ -396,6 +396,111 @@ class VisualInterface:
             'false_negatives': fn,
             'iou_threshold': iou_threshold
         }
+
+    def interactive_correction_ui(self, predictions: List[Dict], image_path: str):
+        """
+        Interfaz interactiva para corregir predicciones.
+        
+        Args:
+            predictions: Lista de predicciones con formato [{'class_name': str, 'confidence': float}]
+            image_path: Ruta a la imagen original
+        """
+        import cv2
+        from pathlib import Path
+        
+        if not Path(image_path).exists():
+            print(f"🖼️  Imagen no encontrada: {image_path}")
+            return
+        
+        image = cv2.imread(str(image_path))
+        if image is None:
+            print(f"🖼️  No se pudo cargar imagen: {image_path}")
+            return
+        
+        print(f"\n🖼️  Corrección interactiva para: {Path(image_path).name}")
+        print(f"   Predicciones: {len(predictions)}")
+        print("=" * 60)
+        
+        corrections = []
+        
+        for i, pred in enumerate(predictions):
+            print(f"\n📊 Predicción {i+1}:")
+            print(f"   Clase: {pred['class_name']}")
+            print(f"   Confianza: {pred['confidence']:.2%}")
+            
+            # Mostrar imagen
+            cv2.imshow(f"Predicción {i+1} - {pred['class_name']}", image)
+            cv2.moveWindow(f"Predicción {i+1} - {pred['class_name']}", 100, 100)
+            
+            print("\n   Opciones:")
+            print("   ✅ Presiona 'y' - Confirmar predicción")
+            print("   ❌ Presiona 'n' - Corregir etiqueta")
+            print("   ⏭️  Presiona 's' - Saltar ejemplar")
+            print("   🚫 Presiona 'q' - Salir")
+            
+            key = cv2.waitKey(0) & 0xFF
+            
+            if key == ord('y'):
+                corrections.append({
+                    'original': pred['class_name'],
+                    'corrected': pred['class_name'],
+                    'confidence': pred['confidence'],
+                    'action': 'confirm'
+                })
+                print("   ✓ Confirmado")
+                
+            elif key == ord('n'):
+                new_class = input(f"   Nueva clase (deja vacío para '{pred['class_name']}')? ").strip()
+                if new_class:
+                    corrections.append({
+                        'original': pred['class_name'],
+                        'corrected': new_class,
+                        'confidence': pred['confidence'],
+                        'action': 'correct'
+                    })
+                    print(f"   ✓ Corregido a: {new_class}")
+                else:
+                    corrections.append({
+                        'original': pred['class_name'],
+                        'corrected': pred['class_name'],
+                        'confidence': pred['confidence'],
+                        'action': 'confirm'
+                    })
+                    print("   ✓ Mantenido")
+                    
+            elif key == ord('s'):
+                print("   ⏭️  Saltado")
+                continue
+                
+            elif key == ord('q'):
+                print("   🚫 Cancelado por usuario")
+                cv2.destroyAllWindows()
+                return corrections
+            
+            cv2.destroyWindow(f"Predicción {i+1} - {pred['class_name']}")
+        
+        cv2.destroyAllWindows()
+        print(f"\n✓ Corrección completada. {len(corrections)} predicciones revisadas.")
+        return corrections
+
+    def export_correction_report(self, corrections: List[Dict], output_path: str):
+        """Exporta un reporte de correcciones."""
+        report = {
+            'timestamp': datetime.now().isoformat(),
+            'total_corrections': len(corrections),
+            'confirmed': len([c for c in corrections if c['action'] == 'confirm']),
+            'corrected': len([c for c in corrections if c['action'] == 'correct']),
+            'changes': corrections
+        }
+        
+        try:
+            with open(output_path, 'w') as f:
+                json.dump(report, f, indent=2, default=str)
+            print(f"✓ Reporte de correcciones guardado: {output_path}")
+            return True
+        except Exception as e:
+            print(f"Error guardando reporte: {e}")
+            return False
     
     def _calculate_iou(self, bbox1: Tuple[int, int, int, int], 
                       bbox2: Tuple[int, int, int, int]) -> float:
